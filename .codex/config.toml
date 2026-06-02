@@ -1,0 +1,9 @@
+[mcp_servers.cmdclaw-local]
+url = "http://127.0.0.1:3010/cmdclaw"
+
+[mcp_servers.cmdclaw-staging]
+url = "https://mcp.staging.cmdclaw.ai/cmdclaw"
+
+
+[mcp_servers.cmdclaw-prod]
+url = "https://mcp.cmdclaw.ai/cmdclaw"
