@@ -454,6 +454,33 @@ The smoke check that catches this in seconds: pull `coworker_logs(runId)` right 
 
 When (if) `skill_enable` lands as an MCP tool, drop the human stop and call it inline.
 
+## 21. `[MODE TEST]` and other dry-run modes need concrete artifacts, not "log it in chat"
+
+When the dry-run path of a skill bypasses every external tool call (no Salesforce write, no Gmail send, no MCP push), the agent is left with no required work — and gpt-5.5 (and peers) treat that as "I've understood, done", emit a short acknowledgement, and stop. The model never produces the structured payload the skill asked for, even when the prompt explicitly says "log the data in chat".
+
+Observed on `sales-call-wrap-up` v1 (2026-06-18): MODE TEST contract said *"n'écris pas dans Salesforce. Loggue le payload `data` complet en chat + simule la réponse"*. Agent read SKILL.md, thought for 18 s, emitted 512 output tokens, and stopped. No `data` JSON. No note. No custom fields. Run "completed", silently broken. v2 fixed the same agent by requiring 3 file artifacts; same transcript, same model, same MODE TEST sentinel — went from 512 → 1441 output tokens with 3 `sandboxFiles` produced.
+
+**Fix:** require a *concrete artifact* the LLM cannot hand-wave. Force a file write (or a `/app/output.html` panel, or a deterministic-script call). Materialising output in the sandbox both forces real generation and produces `sandboxFiles[]` entries the human can verify post-hoc via `coworker_logs`.
+
+Wrong:
+```
+[MODE TEST] : n'écris pas dans Salesforce. Loggue le payload `data` complet en chat + simule la réponse.
+```
+
+Right:
+```
+[MODE TEST] = simulation complète, non-négociable. Tu DOIS produire :
+1. `data` JSON → écris dans /tmp/wrap-up-data.json puis cat
+2. Note Salesforce simulée → écris dans /tmp/wrap-up-note.md puis cat
+3. Mapping custom fields → écris dans /tmp/wrap-up-customfields.txt puis cat
+4. Chat final structuré (5 lignes, format X)
+Tu ne réponds JAMAIS juste "OK MODE TEST".
+```
+
+The same principle applies to any "preview", "rehearsal", or "diff-only" mode: concrete artifact > "log to chat". If the agent has nothing to *do*, it will decide there's nothing to *say* either.
+
+This compounds with rule #15: panels (`/app/output.html`) are the cleanest artifact for MODE TEST because the agentic-app surface validates the output visually in one click. For non-panel coworkers, write a `/app/<slug>-data.json` (or similar) and reference its path in the chat reply — rule #17 turns the path into a downloadable chip and the human can spot-check.
+
 ## Build / debug workflow
 
 1. **Design** — write the SKILL.md focused on what the agent *decides*; offload everything mechanical to bundled scripts.
@@ -476,6 +503,7 @@ When (if) `skill_enable` lands as an MCP tool, drop the human stop and call it i
 - Multi-step coworker that "stops after the first image" — missing validation signals, rule #19.
 - Calling `coworker_run` right after `skill_add` and trusting `status: "completed"` — rule #20. The agent silently can't find the disabled SKILL.md, the run "completes" in 60 s having done nothing.
 - Reporting a coworker as "live" without reading `coworker_logs` for the test run. Status `completed` ≠ agent did the right thing — read the events, see what fired.
+- MODE TEST contract phrased as "log the data in chat and simulate" — rule #21. The agent will read the skill, decide there's nothing to do, and emit a 300-token ack. Make the simulation produce real files in the sandbox.
 
 ## See also
 
