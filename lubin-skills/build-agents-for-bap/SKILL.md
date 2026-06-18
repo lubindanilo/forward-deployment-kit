@@ -221,6 +221,8 @@ This is the right place to put: interactive quote/invoice editors, dashboards, c
 
 A shared design system for these panels (tokens, components, layout primitives reused across coworkers) is the next step and is not yet validated. Until it is, write each panel as if a client were seeing it on a 27-inch screen — same bar as a polished SaaS product page.
 
+**Pre-built templates.** Canonical panels for common patterns live in [`templates/`](./templates/) next to this SKILL — currently `email-validate.html`, more to come (ticket list, devis editor, fiche). Each ships the design tokens, the button contract already wired (postMessage send + result listener + 5 s timeout fallback + one-shot ack), the Edit/Send/Cancel flow, and an auto-resize body. They declare their substitution slots in a top-of-file comment, e.g. `<!-- @slots to, subject, body -->`. Open the folder to see what is available and how the panels are structured; copy and fill the slots when a pattern matches, or use them as reference for a custom panel. Nothing forces you to start from them — they exist so coworkers do not reinvent the same JavaScript and CSS each run.
+
 **The contract.** A button in the page is a transcript-injector. A click sends `postMessage` to the parent, the parent injects the `prompt` field as a new user message in the chat, the coworker reacts as if the user had typed it.
 
 Send (iframe to parent), fired on a real click:
