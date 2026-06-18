@@ -1,0 +1,142 @@
+<!-- @slots to, subject, body -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Validate the email draft</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap');
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px 30px; background: #fafaf9; font-family: 'Geist', -apple-system, system-ui, sans-serif; color: #0c0a09; }
+    .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
+    h1 { font-family: 'Geist', sans-serif; font-size: 22px; font-weight: 500; letter-spacing: -0.025em; margin: 0; color: #0c0a09; line-height: 1.15; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 999px; white-space: nowrap; letter-spacing: 0.02em; }
+    .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #d97706; }
+    .pill.sent { background: #d1fae5; color: #065f46; }
+    .pill.sent::before { background: #059669; }
+    .pill.cancelled { background: #f5f5f4; color: #57534e; }
+    .pill.cancelled::before { background: #78716c; }
+    .draft { background: white; border: 0.5px solid #e7e5e4; border-radius: 10px; padding: 22px 26px; }
+    .meta-block { padding-bottom: 16px; border-bottom: 0.5px solid #f5f5f4; margin-bottom: 18px; }
+    .meta-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+    .meta-label { font-size: 10.5px; font-weight: 500; color: #78716c; text-transform: uppercase; letter-spacing: 0.1em; min-width: 64px; }
+    .meta-field { flex: 1; font-family: 'Geist', sans-serif; font-size: 13px; color: #0c0a09; border: 0.5px solid transparent; background: transparent; padding: 4px 8px; outline: 0; border-radius: 4px; min-width: 0; }
+    .meta-field:not([readonly]) { background: #fafaf9; border-color: #d6d3d1; }
+    .meta-field:not([readonly]):focus { border-color: #0c0a09; background: white; box-shadow: 0 0 0 3px rgba(12, 10, 9, 0.08); }
+    .body-field { display: block; width: 100%; font-family: 'Geist', sans-serif; font-size: 15px; line-height: 1.7; color: #1c1917; border: 0.5px solid transparent; background: transparent; padding: 0; outline: 0; resize: none; overflow: hidden; box-sizing: border-box; }
+    .body-field:not([readonly]) { background: #fafaf9; border-color: #d6d3d1; padding: 12px 14px; border-radius: 6px; }
+    .body-field:not([readonly]):focus { border-color: #0c0a09; background: white; box-shadow: 0 0 0 3px rgba(12, 10, 9, 0.08); }
+    .actions { display: flex; gap: 8px; margin-top: 22px; flex-wrap: wrap; }
+    .btn { padding: 10px 22px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; font-family: 'Geist', sans-serif; border: 0.5px solid transparent; transition: background 0.12s, color 0.12s; }
+    .btn-primary { background: #0c0a09; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #292524; }
+    .btn-secondary { background: white; color: #44403c; border-color: #d6d3d1; }
+    .btn-secondary:hover:not(:disabled) { background: #fafaf9; }
+    .btn-ghost { background: transparent; color: #57534e; border-color: #d6d3d1; }
+    .btn-ghost:hover:not(:disabled) { background: #fafaf9; }
+    .btn-ghost.editing { background: #1c1917; color: white; border-color: #1c1917; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <h1>Validate the email draft</h1>
+    <span class="pill" id="status">Proposed</span>
+  </div>
+  <div class="draft">
+    <div class="meta-block">
+      <div class="meta-row">
+        <span class="meta-label">To</span>
+        <input class="meta-field" id="to" value="{{to}}" readonly />
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Sujet</span>
+        <input class="meta-field" id="subject" value="{{subject}}" readonly />
+      </div>
+    </div>
+    <textarea class="body-field" id="body" readonly>{{body}}</textarea>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary" id="send">Send</button>
+    <button class="btn btn-ghost" id="edit">Edit</button>
+    <button class="btn btn-secondary" id="cancel">Cancel</button>
+  </div>
+  <script>
+  (function () {
+    var fields = ['to', 'subject', 'body'].map(function (id) { return document.getElementById(id); });
+    var editBtn = document.getElementById('edit');
+    var sendBtn = document.getElementById('send');
+    var cancelBtn = document.getElementById('cancel');
+    var status = document.getElementById('status');
+    var body = fields[2];
+    var editing = false;
+    var acked = false;
+
+    function autoSize() {
+      body.style.height = 'auto';
+      body.style.height = body.scrollHeight + 'px';
+    }
+    autoSize();
+    body.addEventListener('input', autoSize);
+    setTimeout(autoSize, 0);
+
+    function setSentState() {
+      [sendBtn, editBtn, cancelBtn].forEach(function (b) { b.disabled = true; });
+      fields.forEach(function (f) { f.readOnly = true; });
+      status.textContent = 'Sent';
+      status.className = 'pill sent';
+    }
+
+    function setCancelledState() {
+      [sendBtn, editBtn, cancelBtn].forEach(function (b) { b.disabled = true; });
+      status.textContent = 'Cancelled';
+      status.className = 'pill cancelled';
+    }
+
+    function send(prompt, onAccepted) {
+      [sendBtn, editBtn, cancelBtn].forEach(function (b) { b.disabled = true; });
+      acked = false;
+      var onAck = function (e) {
+        if (!e.data || e.data.type !== 'bap:agentic-app-prompt-result') return;
+        acked = true;
+        window.removeEventListener('message', onAck);
+        if (e.data.status === 'rejected') {
+          [sendBtn, editBtn, cancelBtn].forEach(function (b) { b.disabled = false; });
+        } else {
+          onAccepted();
+        }
+      };
+      window.addEventListener('message', onAck);
+      parent.postMessage({ type: 'bap:agentic-app-prompt', version: 1, prompt: prompt }, '*');
+      setTimeout(function () {
+        if (!acked) {
+          [sendBtn, editBtn, cancelBtn].forEach(function (b) { b.disabled = false; });
+        }
+      }, 5000);
+    }
+
+    editBtn.addEventListener('click', function () {
+      editing = !editing;
+      fields.forEach(function (f) { f.readOnly = !editing; });
+      editBtn.textContent = editing ? 'Done editing' : 'Edit';
+      editBtn.classList.toggle('editing', editing);
+      autoSize();
+      if (editing) body.focus();
+    });
+
+    sendBtn.addEventListener('click', function () {
+      var to = fields[0].value.trim();
+      var subject = fields[1].value.trim();
+      var bodyVal = fields[2].value;
+      var prompt = '[SEND EMAIL EXACTLY AS BELOW]\n\nTo: ' + to + '\nSubject: ' + subject + '\n\nBody:\n' + bodyVal + '\n\nUse the content above verbatim. Do not rephrase, reformat, summarize, or add a signature. Send as the email body, no other changes.';
+      send(prompt, setSentState);
+    });
+
+    cancelBtn.addEventListener('click', function () {
+      send('Rejected. Discard the draft and ask me again with my edits.', setCancelledState);
+    });
+  }());
+  </script>
+</body>
+</html>
