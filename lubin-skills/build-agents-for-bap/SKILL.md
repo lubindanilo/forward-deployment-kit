@@ -426,6 +426,34 @@ run phase 1 + phase 2 back-to-back without pausing.
 
 Without these two, multi-step coworkers feel "stuck" even though the run completes successfully — the LLM just decided it was done.
 
+## 20. `skill_add` uploads disabled — UI enable is mandatory before runs
+
+`mcp__bap__skill_add` returns `enabled: false` on every fresh upload. Disabled skills are *not* written into the sandbox under `/app/.claude/skills/<slug>/` at pre-prompt time — only enabled skills are. So a coworker whose `allowedSkillSlugs` references a disabled skill behaves like this:
+
+```
+find /app/.opencode/skills -name SKILL.md | xargs grep -l 'my-slug'   →   (no output)
+read /app/.claude/skills/my-slug/SKILL.md                              →   File not found
+glob '**/my-slug/**'                                                   →   No files found
+[agent gives up, run ends "completed" in 60 s with 0 tools fired]
+```
+
+No error in the run log. No warning at upload time. Pre-prompt timings even show `pre_prompt_skills_write_completed` — but that step writes only the built-in integration skills + enabled user skills. Yours is neither.
+
+There is currently **no MCP tool to flip the enabled bit**. `skill_add` only inserts the row. Enable must be done in the workspace UI:
+
+> HeyBap → Skills tab → find the slug → toggle on.
+
+The fact that this isn't programmatic is itself a footgun for any automation that walks the full `skill_add` → `coworker_update` → `coworker_run` pipeline. The orchestrator (`transcript-to-bap-coworker`) treats this as a **HUMAN STOP** between upload and test, the same way an unbound workspace MCP triggers a stop. Wrap your pipeline accordingly:
+
+1. `skill_add` returns ids, `enabled: false`.
+2. Surface a human-action message listing the slugs to enable.
+3. Block until the human acks.
+4. Then run the test loop (rule #19 `[MODE TEST]` payloads will exercise the deployed SKILL.md).
+
+The smoke check that catches this in seconds: pull `coworker_logs(runId)` right after the first test run and look for the first `read` or `bash find` for `SKILL.md`. If the result is `(no output)` or `File not found`, the skill never made it to the sandbox — the rest of the log is irrelevant. Re-enable, re-run.
+
+When (if) `skill_enable` lands as an MCP tool, drop the human stop and call it inline.
+
 ## Build / debug workflow
 
 1. **Design** — write the SKILL.md focused on what the agent *decides*; offload everything mechanical to bundled scripts.
@@ -446,6 +474,8 @@ Without these two, multi-step coworkers feel "stuck" even though the run complet
 - Giving up on a Gmail/Outlook/Slack step because the system-init message says "unavailable" without trying the sandbox CLI — rule #16.
 - Stuffing a 17 KB HTML template into `coworker_uploadDocument` and wondering why the agent only sees the first 2 KB — rule #18.
 - Multi-step coworker that "stops after the first image" — missing validation signals, rule #19.
+- Calling `coworker_run` right after `skill_add` and trusting `status: "completed"` — rule #20. The agent silently can't find the disabled SKILL.md, the run "completes" in 60 s having done nothing.
+- Reporting a coworker as "live" without reading `coworker_logs` for the test run. Status `completed` ≠ agent did the right thing — read the events, see what fired.
 
 ## See also
 

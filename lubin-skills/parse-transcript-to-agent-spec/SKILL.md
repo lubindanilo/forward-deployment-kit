@@ -239,6 +239,41 @@ Every agent must come with at least one `evidence` entry: a quote from the trans
 
 If the transcript is non-timestamped, leave `timestampApprox` as an empty string and use the position in the transcript ("first third" / "near the end").
 
+### 9. Platform fit — what Bap is and is not designed for
+
+Before emitting an agent, sanity-check that the workflow matches what Bap (Heybap) was built for. Bap is a coworker platform: each coworker runs scheduled or human-triggered turns, reads structured inputs, calls wired tools, and produces structured outputs. It is not general-purpose AI infrastructure, and it is not a hosting platform for arbitrary products. Mismatched asks should go to `discardedCandidates` with a one-line note, not become low-confidence agents.
+
+**Bap is strong at, build the agent:**
+
+- **Structured, repeatable workflows.** Inputs and outputs can be enumerated up front (a transcript → a CRM update; a calendar event → a prep brief; a ticket → a categorised reply draft). One run = one well-defined turn.
+- **Wrap-up / post-event automation.** "Event happened, now do the N things a human used to do" — call ended, ticket created, doc signed, email received. The event is the trigger, the manual steps are the agent.
+- **Read-heavy CRM / docs / messaging chores.** Pull from one or two sources, transform, write to one or two destinations. Native integrations cover Slack, Gmail, Outlook, Notion, Linear, Airtable, Salesforce, HubSpot, Dynamics, LinkedIn, Google Calendar/Docs/Sheets/Drive, GitHub. Anything in this list is effectively free.
+- **Human-in-the-loop validation panels.** Generate a draft (email, ticket, summary, devis), surface it in the agentic-app panel (`/app/output.html`) with Send/Edit/Cancel buttons, the human decides in a click, the agent acts on the decision. This is the dominant production pattern; lean toward it whenever the agent's output is "a message to a human" rather than "a row in a system".
+- **Async background work measured in seconds to minutes.** Transcription, doc parsing, image generation, multi-step batch jobs taking 1–10 min per run.
+- **Scheduled batch jobs.** Daily digests, weekly pipelines, hourly polling of a source — `schedule: {type: daily|weekly|interval...}` is first-class.
+
+**Bap is not designed for (push to `discardedCandidates` with reason):**
+
+- **Live, low-latency interaction loops.** Live transcription during a call, live "next-best-action" prompts whispering to an advisor while the customer is still on the phone, real-time co-pilots reacting under one second. Bap is turn-based async; sub-second response loops belong on a different stack (browser SDK, telephony platform, dedicated streaming AI service).
+- **Voice-to-voice or telephony-driven workflows.** Autonomous outbound calling, IVR replacement, in-call voice agents that take the call themselves. No native telephony, no voice synthesis loop, no PSTN integration. Refer the prospect to a voice-AI vendor (Vapi, Retell, ElevenLabs Conversational AI directly) and have Bap pick up post-call from the transcript instead. When a transcript surfaces this need, the right output is a wrap-up agent (always feasible) plus an `ambiguities[]` entry pointing at the voice platform of record.
+- **Hosted dashboards and BI surfaces.** Real-time charts with manager logins, drill-downs, embedded report viewers. Bap can compose a daily digest and post it to Slack, write metrics to a Notion page, or produce an HTML snapshot, but it does not host a BI product. Looker, Metabase, Tableau, the client's existing BI is where dashboards live.
+- **Full-product replacements.** "Build us a custom CRM / a Salesforce clone / our internal ticketing tool / our pricing engine". Bap automates *inside* existing tools; it does not replace them. The Concentrix Jean-Marc case is the canonical anti-pattern: a transcript asked for a 50-page custom CRM, the correct output was `discardedCandidates`, not a 200-step agent.
+- **Anything that needs an SDK in the client's own app.** Browser extensions, mobile-app embeds, in-product chat widgets. Bap is server-side; the client's app does not call Bap, Bap calls the client's APIs.
+- **High-frequency or per-keystroke automations.** Anything firing more than ~1×/minute per workflow strains the orchestration model. Batch them or move them downstream.
+- **Unstructured "creative writing" loops with no contract.** "Be my brainstorming partner" / "help me think" / "iterate freely with me until I'm happy". A coworker needs a defined output and a defined success criterion. Open-ended chat without a contract = use the chat UI, not a coworker.
+
+**Heuristic, one sentence.** If the workflow is *"an event happens, here are the structured steps a human used to do, run them and write to system X"*, build it. If it's *"a person needs help in real time"* or *"we want a tool we don't have today"*, refer the prospect elsewhere or scope it down to a Bap-shaped sub-workflow first.
+
+**Telephony-adjacent (recurring case).** Sales/support call workflows on Bap should look like: *post-call transcript arrives → coworker reads, summarises, updates CRM, drafts follow-up*. They should not look like: *coworker takes the call*. Multi-channel follow-up campaigns are Bap-shaped only when the channels have native integrations (email/Gmail/Outlook = yes); WhatsApp/SMS need a custom MCP build + human bind in the workspace UI and should be scoped explicitly (see `transcript-to-bap-coworker` step 2b human stop).
+
+**Multi-agent decomposition.** If the prospect's wish list contains a wide net ("auto summary + CRM update + insights + follow-up + voice triage + dashboard"), do not emit one super-agent. Decompose:
+
+- Group items that share trigger + input + destination into one coworker (a "wrap-up" coworker that summarises, extracts insights, and writes them all to the same Salesforce case is *one* workflow).
+- Separate items that have a different trigger or a different human in the loop (a "follow-up email drip with human validation" is a different coworker from the wrap-up — different trigger, different operator, different UX).
+- Discard items that fail this platform-fit check.
+
+Document the decomposition logic in `transcriptSummary` so the human inspector sees why N became M.
+
 ## Invocation patterns
 
 ### Direct, from Claude Code
@@ -291,6 +326,8 @@ If `goal` or `steps[]` can't be derived at all, do not emit the agent. Push it t
 - Skipping `evidence` quotes. Without them, the human inspector cannot verify and the orchestrator cannot defend the choice.
 - Putting `[MODE TEST]` only in some payloads. All testPayloads must include it; the test loop relies on this contract.
 - Marking an agent `confidence: 0.9` because it sounds nice. Confidence is based on how *explicit* the transcript was, not how plausible the agent feels.
+- Forcing a voice-triage / live-copilot / BI-dashboard ask into a low-confidence agent because "we can try". Rule #9 — these belong in `discardedCandidates` with a one-line platform-fit reason and (optionally) an `ambiguities[]` entry pointing at the right downstream platform.
+- Emitting one super-agent for "summary + CRM + insights + follow-up + dashboard". Decompose per rule #9: group items that share trigger + input + destination, separate items that have a different trigger or different human in the loop, discard items that fail platform fit.
 
 ## See also
 

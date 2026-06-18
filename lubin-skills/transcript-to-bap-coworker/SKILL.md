@@ -283,33 +283,94 @@ mcp__bap__skill_add({
 
 Verify the skill loaded by listing it indirectly: create a minimal smoke `chat_run` that asks the system to list available skills, and check the slug is present. If absent, the upload silently failed; abort the agent build and surface.
 
-## Step 5. Create the coworker
+## Step 5. Create the coworker — two-call pattern
+
+**The MCP `coworker_create` tool has a narrow signature.** It accepts only: `name`, `prompt`, `model`, `authSource`, `trigger`, `integrations`, `autoApprove`, `folder`, `files`. It does **NOT** accept `username`, `skillSlugs`, `requiresUserInput`, `userInputPrompt`, `workspaceMcpServerIds`, `schedule`, `toolAccessMode`, `customIntegrations`, or `description`.
+
+So a fully wired coworker always takes **two calls**: a minimal `coworker_create` followed by a `coworker_update` that adds everything else. Skip the update and the coworker is shipped with no skill wired, no start message, no MCP IDs, no schedule — silent half-broken state.
+
+### 5a. Minimal create
 
 ```
-mcp__bap__coworker_create({
+const created = await mcp__bap__coworker_create({
   name: agent.agentName,
-  username: agent.slug,                                  // hyphenated, unique per workspace
   prompt: assemblePrompt(agent),                         // see below
   model: agent.model || "openai/gpt-5.5",                // rule #8 default
   authSource: agent.authSource || "shared",
   trigger: agent.triggers[0].type || "manual",
-  requiresUserInput: agent.requiresUserInput,
-  userInputPrompt: agent.triggers.find(t => t.type === "manual")?.userInputPrompt,
   autoApprove: false,                                    // safe default; test loop will flip if needed
-  integrations: toolPlan.nativeIntegrations.map(t => t.name),
-  workspaceMcpServerIds: [...toolPlan.existingWorkspaceMcps, ...toolPlan.customMcpsToBuild.map(m => m.workspaceMcpServerId)],
-  skillSlugs: [agent.slug],
-  schedule: agent.triggers.find(t => t.type === "scheduled")?.spec || null
+  integrations: toolPlan.nativeIntegrations.map(t => t.name)
 })
+const coworkerId = created.coworker.id                   // UUID, used as `reference` in update
 ```
 
 `assemblePrompt(agent)` builds the prompt around 5 blocks: role, mission, tool inventory with namespaced names (rule #6), step-by-step procedure with validation signals (rule #19), output contract referencing the skill, and a "what to do if blocked" section.
 
+### 5b. Update — wire everything the create cannot set
+
+```
+await mcp__bap__coworker_update({
+  reference: coworkerId,                                 // or the returned @username once 5b sets one
+  username: agent.slug,                                  // hyphenated, unique per workspace
+  description: agent.description,                        // human-readable one-liner
+  skillSlugs: [agent.slug],
+  workspaceMcpServerIds: [
+    ...toolPlan.existingWorkspaceMcps,
+    ...toolPlan.customMcpsToBuild.map(m => m.workspaceMcpServerId)
+  ],
+  requiresUserInput: agent.requiresUserInput,
+  userInputPrompt: agent.triggers.find(t => t.type === "manual")?.userInputPrompt,
+  toolAccessMode: "selected",                            // restrict to listed integrations; less LLM confusion
+  schedule: agent.triggers.find(t => t.type === "scheduled")?.spec || null
+})
+```
+
+Run 5a and 5b for **every** coworker — do not batch creates and only update the last one. Each coworker needs its own update, or the skill, start message, and MCP IDs are missing.
+
+### 5c. Sanity check the wiring
+
+Before moving on, call `coworker_get(@${agent.slug})` and confirm:
+
+- `allowedSkillSlugs` contains `agent.slug`
+- `requiresUserInput` is `true` and `userInputPrompt` is non-empty (if the agent expects input)
+- `allowedIntegrations` matches the toolPlan
+- `allowedWorkspaceMcpServerIds` is non-empty if the agent needs a workspace MCP
+
+A `get` that misses any of these means the update silently dropped a field — usually a typo in the field name. Fix and re-update before testing.
+
 Persist the coworker reference (the returned `@username`) to `${skillFolderRoot}/<callId>/coworkers.json`.
 
-## Step 6. Run the test loop
+## Step 6. Run the test loop — never skip this
 
-For each freshly created coworker:
+**Non-negotiable.** A coworker is not "live" until at least one `[MODE TEST]` run has produced the expected behaviour. The `[MODE TEST]` sentinel exists precisely to make this step workspace-safe: writes to Salesforce / Gmail / Notion are bypassed, the agent logs the payload it *would* have sent. There is no "I don't want to pollute the workspace" exception — that is the failure mode this contract removes.
+
+Skipping this step has cost two real demos in the field: in both, the coworker shipped, the human-readable status said "live", and the first real run failed silently (skill not enabled, MCP tool name mismatch, schedule never fired). The fix is upstream: validate via a `[MODE TEST]` run *before* declaring the build done.
+
+### 6a. Prerequisite — enable the freshly-uploaded skills
+
+`mcp__bap__skill_add` returns `enabled: false` for new user skills. Disabled skills are *not* deployed into the sandbox under `/app/.claude/skills/`, so the coworker's `find /app/.opencode/skills -name SKILL.md | xargs grep -l '<slug>'` returns nothing, the agent gives up cleanly, and the run completes with no real work done. No error, no warning — just an agent that ran fast and produced nothing.
+
+There is currently **no MCP tool to enable a skill programmatically**. This is a workspace UI step:
+
+> HeyBap UI → Skills → find the freshly-uploaded skill by slug → toggle it on.
+
+The orchestrator must surface this as a **HUMAN STOP** between Step 4 (`skill_add`) and Step 6 (test loop), the same way Step 2b stops for the MCP bind. Block until the human confirms; do not run the test loop against unenabled skills (it will pass with `(no output)` and you will think the agent works).
+
+```
+[human action required — skills uploaded but disabled]
+Two skills are queued and need to be enabled in the workspace:
+  - sales-call-wrap-up
+  - sales-followup-drip
+
+Open HeyBap → Skills → toggle each one on.
+Reply "skills enabled" when done and I'll run the test loop.
+```
+
+When this MCP gap is closed (a `skill_update({enabled: true})` or `skill_enable({slug})` lands), drop the human stop and call it programmatically.
+
+### 6b. Invoke the test loop
+
+For each freshly enabled coworker:
 
 ```
 result = invoke bap-coworker-test-loop
@@ -324,12 +385,25 @@ result = invoke bap-coworker-test-loop
   }
 ```
 
-Branch on the result:
+Per agent: every `testPayloads[]` entry must be exercised, and every one must contain `[MODE TEST]` (parse-skill rule #5). The first payload validates the happy path; subsequent ones validate the degenerate inputs.
 
-- `status: "success"` -> coworker is ready, mark `live` in the final report.
-- `status: "handoff"` -> coworker exists but needs human attention. Mark `needsReview`, append the diagnosis.
+### 6c. Read the logs, do not trust the status
 
-The test loop already does cleanup; nothing else to do here.
+`coworker_run` returning `status: "completed"` only means the sandbox finished. It does **not** mean the agent did the right thing. Always pull `coworker_logs(runId)` and verify:
+
+- The first `read` or `bash find` tool_use for the skill's SKILL.md actually returned content (not `(no output)` or `File not found`).
+- The expected tool calls fired (Salesforce write attempt, Gmail send attempt, `render.py` execution, etc.) — even bypassed in `[MODE TEST]`, the agent should still *attempt* the tool path so you can confirm it picked the right tool name.
+- The structured payload the agent logged matches the skill's data contract.
+- `sandboxFiles` contains the artefacts the skill claims to produce (e.g. `/app/output.html` for panel coworkers).
+
+If any of those fail, the run "completed" but the coworker is broken — do not mark `live`. Iterate via `coworker_update` (prompt / skillSlugs / userInputPrompt) and re-run.
+
+### 6d. Branch on the result
+
+- `status: "success"` and logs check out → mark `live` in the final report.
+- `status: "handoff"` or logs reveal a silent failure → mark `needsReview`, append the diagnosis (which check failed in 6c).
+
+The test loop already does sandbox cleanup; nothing else to do here.
 
 ## Step 7. Consolidated report
 
