@@ -1,0 +1,13 @@
+linear:
+  team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
+  team_key: "BAP"
+github_repo: "the-agentic-company/bap"
+research_time_cap_minutes: 10
+corpus:
+  transcripts_root: null                # set to the local Grain cache if present; null = use Grain API per grain-corpus-access memory
+  coworker_builds_root: "/tmp/agent-builds"
+  state_dir_pattern: "${callId}/agent-spec.json"
+tshirt_thresholds:
+  S: 100
+  M: 300
+  L: 800

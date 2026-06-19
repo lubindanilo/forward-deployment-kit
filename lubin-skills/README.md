@@ -11,7 +11,8 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
 | [`parse-transcript-to-agent-spec`](parse-transcript-to-agent-spec/SKILL.md) | Read a sales / discovery transcript and emit a strict JSON spec describing the coworker(s) the conversation implies (goal, steps, tools, success criteria, test payloads). |
 | [`bap-coworker-test-loop`](bap-coworker-test-loop/SKILL.md) | Run + observe + patch loop: `coworker_run` -> `coworker_logs` -> eval -> `coworker_update` until the coworker passes every success criterion. Supports sandbox-redirect and act-then-cleanup strategies per integration. |
 | [`transcript-to-bap-coworker`](transcript-to-bap-coworker/SKILL.md) | Meta-skill that chains the four above into one pipeline: transcript -> spec -> custom MCP(s) if needed -> skill bundle -> coworker -> tested. The "finish the call, walk out with the agents live" loop. |
-| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + Linear ticket in team `Bap` at status `In Review`) or `bap-feature-brainstorm` (Linear ticket at status `Triage` with label `Need More Shaping` carrying problem + 3 options + decision question). Linear's own integrations notify the team; no direct Slack post. |
+| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + Linear ticket in team `Bap` at status `In Review`, assignee Lubin) or `bap-feature-brainstorm` (Linear ticket at status `Triage` with label `Need More Shaping` carrying problem + 3 options + decision question, assignee Baptiste). Linear's own integrations notify the team; no direct Slack post. |
+| [`bap-capability-impact-analyzer`](bap-capability-impact-analyzer/SKILL.md) | When a finding is a *capability gap* (HeyBap can't do X today), produce a structured impact analysis: adjacent use cases the missing capability would unlock (with evidence from past transcripts and past coworker builds), effort estimate (t-shirt size + lines + surfaces), implementation sketch, go/no-go recommendation with rationale. Output feeds `bap-feature-brainstorm` (Impact section) or posts as a Linear comment when invoked standalone on an existing `BAP-<n>`. |
 | [`bap-bug-report`](bap-bug-report/SKILL.md) | SIMPLE leaf. Clones the bap repo, reproduces the bug live (Chrome MCP for UI), creates a Linear ticket in team `Bap` to get an identifier (`BAP-<n>`), implements the quick fix on a branch named `fix/bap-<n>-slug`, opens a PR titled `BAP-<n> <Area>: …`, then transitions the Linear ticket to `In Review` and attaches the PR. Embeds a `FINDING_CONTEXT` JSON block in the Linear ticket description for downstream verification. |
 | [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) | Closes the loop after a PR is merged + deployed. Three modes: A (re-run coworker, default), B (Chrome MCP visual repro), C (headless Playwright spec generated per finding and committed for permanent regression). Verdict on Pass: comments the Linear ticket and transitions it to `Live` (completed-type status). On Fail: opens a new Linear ticket via `bap-finding-router` labelled `Regression` and linked to the original via `relatedTo`. |
 
@@ -40,11 +41,17 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
               |                |
               v                v
        bap-bug-report   bap-feature-brainstorm
-       (Linear BAP-<n>  (Linear BAP-<n>
-        at In Review     at Triage with
-        + PR opened      Need More Shaping
-        + FINDING_CONTEXT label, 3 options
-        in ticket body)  in body)
+       (Linear BAP-<n>          ^
+        at In Review,           |  feature gap?  call first:
+        assignee Lubin,         +- bap-capability-impact-analyzer
+        + PR opened             |  (use cases unlocked, t-shirt
+        + FINDING_CONTEXT       |   size, implement|wait|defer|
+        in ticket body)         |   won't fix verdict)
+                                v
+                       Linear BAP-<n> at Triage,
+                       Need More Shaping label,
+                       Impact + 3 options in body,
+                       assignee Baptiste
               |
               v (after merge + deploy)
        bap-post-deploy-verify
