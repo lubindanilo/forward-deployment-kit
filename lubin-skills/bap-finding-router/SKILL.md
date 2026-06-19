@@ -92,8 +92,8 @@ After classification, two destinations:
 
 | classification | downstream skill | output |
 |----------------|------------------|--------|
-| SIMPLE (bug or feature) | `bap-bug-report` | Branch + quick fix implemented + PR opened on `the-agentic-company/bap` + Linear ticket created in team `Bap` at status `In Review`, labels `Bug` or `Feature` + `Dogfooding`, assignee Baptiste, PR URL attached. Features whose fix exceeds ~50 lines land as draft PRs with a TODO checklist in the ticket body (handled by `bap-bug-report` itself). |
-| COMPLEX (feature OR structural bug) | `bap-feature-brainstorm` | Investigation + problem statement + 3 defensible options + decision question, posted as a Linear ticket in team `Bap` at status `Triage`, labels `Need More Shaping` + (`Bug` or `Feature`) + `Dogfooding`, assignee Baptiste. No PR opened. Implementation goes through `bap-bug-report` in a follow-up once the team picks an option (the brainstorm ticket then gets transitioned to `In Progress` and a new SIMPLE ticket is opened with `relatedTo` set to it). |
+| SIMPLE (bug or feature) | `bap-bug-report` | Branch + quick fix implemented + PR opened on `the-agentic-company/bap` + Linear ticket created in team `Bap` at status `In Review`, labels `Bug` or `Feature` + `Dogfooding`, assignee **Lubin** (operator owns the PR), PR URL attached. Features whose fix exceeds ~50 lines land as draft PRs with a TODO checklist in the ticket body (handled by `bap-bug-report` itself). |
+| COMPLEX (feature OR structural bug) | `bap-feature-brainstorm` | Investigation + problem statement + 3 defensible options + decision question, posted as a Linear ticket in team `Bap` at status `Triage`, labels `Need More Shaping` + (`Bug` or `Feature`) + `Dogfooding`, assignee **Baptiste** (CTO drives the design choice). When the finding is a capability gap, `bap-capability-impact-analyzer` is invoked first so the ticket carries an Impact section (use cases unlocked, effort estimate, recommendation). No PR opened. Implementation goes through `bap-bug-report` in a follow-up once the team picks an option (the brainstorm ticket then gets transitioned to `In Progress` and a new SIMPLE ticket is opened with `relatedTo` set to it). |
 
 The router does not create the ticket itself. It only classifies and forwards. The downstream skill owns the rest of the loop (investigation depth, PR, Linear ticket creation, dedup of its own kind).
 
@@ -208,7 +208,7 @@ linear:
   baptiste_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"
   louis_user_id: "90938296-0e91-4439-9c53-b939cd975d20"
   lubin_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"
-  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"
+  default_assignee_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"   # Lubin for SIMPLE; brainstorm overrides to Baptiste for COMPLEX
   labels:
     bug: "..."
     feature: "..."

@@ -5,7 +5,7 @@ description: |
   (the-agentic-company/bap), implement the fix on a branch, open a Pull
   Request on GitHub, and create a Linear ticket in team `Bap` (key BAP)
   at status `In Review`, labelled `Bug` (or `Feature`) + `Dogfooding`,
-  assigned to Baptiste, with the PR attached as a link. Linear's
+  assigned to the operator (Lubin), with the PR attached as a link. Linear's
   notifications (Slack integration, email, in-app) replace any direct
   Slack post. Use when the user describes a bug or feature gap in Bap
   / HeyBap (chat, coworker output, attachments, MCP, skills UI, run
@@ -146,7 +146,7 @@ mcp__linear__save_issue({
     "<config.linear.labels.dogfooding>",                  // every FDE-surfaced finding
     "<config.linear.labels.ui_ux>"                        // only if the finding lives in the UI
   ],
-  assignee: "<config.linear.default_assignee_user_id>",   // Baptiste
+  assignee: "<config.linear.default_assignee_user_id>",   // Lubin for SIMPLE
   priority: 3                                             // 0=None 1=Urgent 2=High 3=Medium 4=Low; default 3
 })
 ```
@@ -331,7 +331,7 @@ linear:
   team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
   team_key: "BAP"
   default_project_id: null
-  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste
+  default_assignee_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"  # Lubin
   labels:
     bug: "e356eade-cc41-4abb-9447-00487b30583c"
     feature: "296529af-3672-4bd7-876d-64245d40c768"

@@ -310,7 +310,7 @@ The 60m cadence balances deploy latency with not waiting too long for verificati
 linear:
   team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
   team_key: "BAP"
-  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste
+  default_assignee_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"  # Lubin (regression tickets are SIMPLE)
   labels:
     regression: "325fae29-9f90-4f2b-bd59-7752e5a35b49"
     dogfooding: "50b28f0f-60be-460d-9db1-bd2e03e79f42"

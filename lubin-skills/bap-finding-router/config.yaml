@@ -5,7 +5,7 @@ linear:
   baptiste_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"
   louis_user_id: "90938296-0e91-4439-9c53-b939cd975d20"
   lubin_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"
-  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste (CTO)
+  default_assignee_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"  # Lubin (operator owns SIMPLE PRs + tickets). bap-feature-brainstorm overrides to Baptiste for COMPLEX (CTO drives the design choice).
   labels:
     bug: "e356eade-cc41-4abb-9447-00487b30583c"
     feature: "296529af-3672-4bd7-876d-64245d40c768"
