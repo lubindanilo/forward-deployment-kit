@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FDK pipeline monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d2230;
+    --border: #2a3140;
+    --text: #e5e9f0;
+    --muted: #8893a7;
+    --accent: #6b9aff;
+    --ok: #4ec9b0;
+    --warn: #f0c674;
+    --err: #ff6b6b;
+    --pending: #7a8295;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100%; }
+  body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--panel); }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  main { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 10px; overflow: hidden; }
+  .pane { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; }
+  .pane > h2 { margin: 0; padding: 8px 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .pane > .body { overflow: auto; padding: 8px 12px; flex: 1; }
+  footer { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .runs-pane { grid-row: 1 / span 2; }
+  .run { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel-2); }
+  .run-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .run-head .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: 11px; }
+  .run-head .prospect { font-weight: 600; font-size: 14px; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; margin: 8px 0; }
+  .step { padding: 4px 8px; border-radius: 4px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+  .step .k { color: var(--muted); }
+  .step.done    { background: rgba(78, 201, 176, 0.12); color: var(--ok); }
+  .step.pending { background: rgba(122, 130, 149, 0.12); color: var(--pending); }
+  .step.in-progress { background: rgba(107, 154, 255, 0.15); color: var(--accent); }
+  .step.bound   { background: rgba(78, 201, 176, 0.12); color: var(--ok); }
+
+  .agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; margin-top: 6px; }
+  .agent { padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); }
+  .agent .slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600; }
+  .agent .status { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .agent .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; margin-right: 4px; }
+  .badge.live    { background: rgba(78, 201, 176, 0.18); color: var(--ok); }
+  .badge.testing { background: rgba(240, 198, 116, 0.18); color: var(--warn); }
+  .badge.planned { background: rgba(122, 130, 149, 0.18); color: var(--pending); }
+  .badge.handoff { background: rgba(255, 107, 107, 0.18); color: var(--err); }
+
+  .outputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .output-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--panel-2); display: flex; flex-direction: column; }
+  .output-card .label { padding: 6px 8px; font-size: 11px; display: flex; justify-content: space-between; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .output-card .label .slug { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .output-card iframe { width: 100%; height: 220px; background: white; border: 0; }
+
+  .tickets { display: flex; flex-direction: column; gap: 4px; }
+  .ticket { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); text-decoration: none; color: inherit; }
+  .ticket:hover { border-color: var(--accent); }
+  .ticket .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--accent); }
+  .ticket .title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ticket .state { font-size: 10px; padding: 2px 6px; border-radius: 8px; }
+  .state.unstarted, .state.backlog, .state.triage { background: rgba(122, 130, 149, 0.18); color: var(--pending); }
+  .state.started { background: rgba(107, 154, 255, 0.18); color: var(--accent); }
+  .state.completed { background: rgba(78, 201, 176, 0.18); color: var(--ok); }
+  .state.canceled, .state.duplicate { background: rgba(255, 107, 107, 0.18); color: var(--err); }
+  .labels { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .lbl { font-size: 9px; padding: 1px 5px; border-radius: 6px; background: var(--border); color: var(--muted); }
+
+  pre.logs { margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; }
+  pre.logs .err  { color: var(--err); }
+  pre.logs .warn { color: var(--warn); }
+  pre.logs .ok   { color: var(--ok); }
+  pre.logs .muted { color: var(--muted); }
+
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; text-align: center; font-size: 12px; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-auto-rows: minmax(280px, auto); }
+    .runs-pane { grid-row: auto; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1><span class="dot" id="live-dot"></span>FDK pipeline monitor</h1>
+    <div class="meta" id="meta">connecting...</div>
+  </header>
+  <main>
+    <section class="pane runs-pane">
+      <h2>Pipeline runs <span id="runs-count" class="meta">0</span></h2>
+      <div class="body" id="runs"></div>
+    </section>
+    <section class="pane">
+      <h2>Generated outputs <span id="outputs-count" class="meta">0</span></h2>
+      <div class="body outputs" id="outputs"></div>
+    </section>
+    <section class="pane">
+      <h2>Linear tickets (BAP, label Dogfooding) <span id="tickets-count" class="meta">0</span></h2>
+      <div class="body tickets" id="tickets"></div>
+    </section>
+  </main>
+  <footer>
+    <div id="log-path">log: idle</div>
+    <div><pre class="logs" id="logs"></pre></div>
+    <div id="updated">never</div>
+  </footer>
+
+<script>
+const POLL_MS = 2000;
+
+function badge(text, cls) {
+  const span = document.createElement('span');
+  span.className = `badge ${cls}`;
+  span.textContent = text;
+  return span;
+}
+
+function stepEl(name, value) {
+  const div = document.createElement('div');
+  const k = document.createElement('span'); k.className = 'k'; k.textContent = name;
+  const v = document.createElement('span'); v.textContent = value;
+  div.className = `step ${value}`;
+  // for non-keyword values (e.g. "2/3"), don't apply a status class
+  if (!['done','pending','in-progress','bound'].includes(String(value))) div.className = 'step';
+  div.appendChild(k); div.appendChild(v);
+  return div;
+}
+
+function renderRuns(runs) {
+  const root = document.getElementById('runs');
+  const count = document.getElementById('runs-count');
+  root.innerHTML = '';
+  count.textContent = runs.length;
+  if (!runs.length) {
+    const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'no builds yet. Trigger one with scripts/build-from-transcript.sh';
+    root.appendChild(e); return;
+  }
+  for (const r of runs) {
+    const card = document.createElement('div'); card.className = 'run';
+    const head = document.createElement('div'); head.className = 'run-head';
+    head.innerHTML = `<div><span class="prospect">${r.prospect || '(unknown prospect)'}</span> <span class="id">callId=${r.callId}</span></div><div class="meta">${r.startedAt}</div>`;
+    card.appendChild(head);
+
+    const steps = document.createElement('div'); steps.className = 'steps';
+    for (const [k, v] of Object.entries(r.steps || {})) {
+      steps.appendChild(stepEl(k, v));
+    }
+    card.appendChild(steps);
+
+    if (r.agents && r.agents.length) {
+      const ag = document.createElement('div'); ag.className = 'agents';
+      for (const a of r.agents) {
+        const cell = document.createElement('div'); cell.className = 'agent';
+        const slug = document.createElement('div'); slug.className = 'slug'; slug.textContent = '@' + (a.slug || '?');
+        const status = document.createElement('div'); status.className = 'status';
+        status.appendChild(badge(a.status || 'unknown', a.status));
+        if (a.iter != null) status.appendChild(document.createTextNode(`iter ${a.iter}`));
+        if (a.lastRunId) status.appendChild(document.createTextNode(' • ' + a.lastRunId.slice(0, 12)));
+        cell.appendChild(slug); cell.appendChild(status);
+        ag.appendChild(cell);
+      }
+      card.appendChild(ag);
+    }
+    if (r.ambiguities && r.ambiguities.length) {
+      const amb = document.createElement('div'); amb.style.marginTop = '6px'; amb.style.fontSize = '11px'; amb.style.color = 'var(--warn)';
+      amb.textContent = `${r.ambiguities.length} ambiguity flagged by parser`;
+      card.appendChild(amb);
+    }
+    root.appendChild(card);
+  }
+}
+
+function renderOutputs(runs) {
+  const root = document.getElementById('outputs');
+  const count = document.getElementById('outputs-count');
+  root.innerHTML = '';
+  const flat = [];
+  for (const r of runs) for (const o of (r.outputs || [])) flat.push({...o, callId: r.callId, prospect: r.prospect});
+  count.textContent = flat.length;
+  if (!flat.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'no /app/output.html artefacts yet'; root.appendChild(e); return; }
+  for (const o of flat) {
+    const card = document.createElement('div'); card.className = 'output-card';
+    const label = document.createElement('div'); label.className = 'label';
+    label.innerHTML = `<span class="slug">@${o.agent}</span><span>${o.sizeKb} KB • ${o.prospect || ''}</span>`;
+    card.appendChild(label);
+    const iframe = document.createElement('iframe');
+    iframe.src = o.previewUrl;
+    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.loading = 'lazy';
+    card.appendChild(iframe);
+    root.appendChild(card);
+  }
+}
+
+function renderTickets(linear) {
+  const root = document.getElementById('tickets');
+  const count = document.getElementById('tickets-count');
+  root.innerHTML = '';
+  if (linear.error) {
+    const e = document.createElement('div'); e.className = 'empty'; e.style.color = 'var(--warn)';
+    e.textContent = linear.error;
+    root.appendChild(e); count.textContent = '0'; return;
+  }
+  const tickets = linear.tickets || [];
+  count.textContent = tickets.length;
+  if (!tickets.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'no Dogfooding tickets in team BAP yet'; root.appendChild(e); return; }
+  for (const t of tickets) {
+    const a = document.createElement('a'); a.className = 'ticket'; a.href = t.url; a.target = '_blank'; a.rel = 'noopener';
+    const id = document.createElement('div'); id.className = 'id'; id.textContent = t.identifier;
+    const body = document.createElement('div');
+    const title = document.createElement('div'); title.className = 'title'; title.textContent = t.title;
+    body.appendChild(title);
+    if (t.labels && t.labels.length) {
+      const labels = document.createElement('div'); labels.className = 'labels';
+      for (const l of t.labels) { const span = document.createElement('span'); span.className = 'lbl'; span.textContent = l; labels.appendChild(span); }
+      body.appendChild(labels);
+    }
+    const state = document.createElement('span'); state.className = `state ${t.stateType || ''}`; state.textContent = t.state || '?';
+    a.appendChild(id); a.appendChild(body); a.appendChild(state);
+    root.appendChild(a);
+  }
+}
+
+function renderLogs(logs) {
+  const root = document.getElementById('logs');
+  const pathEl = document.getElementById('log-path');
+  root.innerHTML = '';
+  if (!logs.tail || !logs.tail.length) { pathEl.textContent = 'log: idle'; return; }
+  pathEl.textContent = 'log: ' + (logs.latestPath || '?');
+  const lines = logs.tail.slice(-3);
+  for (const line of lines) {
+    const span = document.createElement('span');
+    if (/error|fail|cannot|denied/i.test(line)) span.className = 'err';
+    else if (/warn/i.test(line)) span.className = 'warn';
+    else if (/ok|done|success|live/i.test(line)) span.className = 'ok';
+    else span.className = 'muted';
+    span.textContent = line + ' ';
+    root.appendChild(span);
+  }
+}
+
+async function tick() {
+  try {
+    const r = await fetch('/state.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('state ' + r.status);
+    const state = await r.json();
+    document.getElementById('meta').textContent = `port ${state.config.port} • builds ${state.config.buildsRoot} • linear ${state.config.linearEnabled ? 'on' : 'off'}`;
+    document.getElementById('updated').textContent = 'updated ' + state.updatedAt;
+    document.getElementById('live-dot').style.background = 'var(--ok)';
+    renderRuns(state.runs || []);
+    renderOutputs(state.runs || []);
+    renderTickets(state.linear || {});
+    renderLogs(state.logs || {});
+  } catch (e) {
+    document.getElementById('meta').textContent = 'disconnected (' + e.message + ')';
+    document.getElementById('live-dot').style.background = 'var(--err)';
+  }
+}
+
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>

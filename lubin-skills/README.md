@@ -107,6 +107,17 @@ scripts/build-from-transcript.sh - "Acme" < /tmp/transcript.txt
 
 The wrapper invokes `claude -p` from the FDK root, hands the transcript to `transcript-to-bap-coworker`, and the orchestrator runs the full chain autonomously. Logs land in `.run-logs/build-<timestamp>.log`.
 
+### Live dashboard (auto-launched)
+
+The wrapper auto-starts a local monitor on `http://localhost:7777` and opens it in the default browser. The dashboard shows, in real time:
+
+- **Pipeline runs** (per `callId`): prospect, current step state (parse / resolve-tools / mcps / skills-upload / coworkers / report), agent fleet with status badges (live / testing / planned / handoff), ambiguity counters.
+- **Generated outputs**: thumbnails of every `/app/output.html` template the pipeline emitted, embedded as sandboxed iframes (one card per coworker).
+- **Linear tickets** in team `Bap` with label `Dogfooding`, color-coded by state (Triage / In Review / Live / Regression). Requires `LINEAR_API_KEY` in env; without it the panel shows a disabled notice and the rest of the dashboard still works.
+- **Run logs**: a tail of the most recent `.run-logs/build-*.log` color-coded by level.
+
+Skip the dashboard with `FDK_SKIP_DASHBOARD=1`. Run it standalone with `scripts/dashboard.sh`; stop it with `kill $(cat .run-logs/monitor.pid)`. The monitor is Python 3 stdlib only (no pip install needed).
+
 What "autonomous after" means concretely:
 
 - No permission prompt for any of the tools needed (`mcp__bap__*`, `mcp__Claude_in_Chrome__*`, Slack MCP, Notion MCP, Linear MCP, `gh`, `git`, `npx playwright`, `vercel`, `curl`, `jq`, etc.). The `.claude/settings.json` allowlist is shared with the team, `.claude/settings.local.json` is gitignored for personal overrides.
