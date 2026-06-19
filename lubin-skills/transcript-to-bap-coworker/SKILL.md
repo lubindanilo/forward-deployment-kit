@@ -473,6 +473,52 @@ This is the artefact a human reviews. Everything in the pipeline is auditable fr
 
 The pipeline can be re-invoked with `{ resumeCallId: "<callId>", action: "mcp-bound", workspaceMcpServerId: "<uuid>" }` to continue past a human bind without re-doing earlier steps. State is read from `${skillFolderRoot}/<callId>/`.
 
+## Autonomous mode (`/loop` over Grain)
+
+This skill is the natural target of an autonomous loop: pick up new call transcripts as they appear, run the full pipeline, drop the report. Two cadences are supported.
+
+### Pattern A: `/loop <interval>` (fixed cadence)
+
+```
+/loop 30m invoke transcript-to-bap-coworker
+  poll: { source: "grain", since: state.lastSeenIso, dedupAgainst: state.seen }
+  context: { language: "fr" }
+  options: { maxAgents: 3, testEnvPath: "./test_env.yaml" }
+```
+
+The wrapper runs every 30 minutes. Each tick:
+
+1. Fetch new Grain transcripts since `state.lastSeenIso` (Grain public API + PAT bearer, see the operator's `grain-corpus-access` memory).
+2. For each new transcript not in `state.seen`, invoke this skill with `transcript: <grain url or text>` and the inferred `context.prospect`.
+3. Append the transcript id to `state.seen` and update `state.lastSeenIso` only after the skill returns (success or handoff). Failure during processing keeps the transcript in queue for the next tick.
+4. Emit a heartbeat line into the configured Slack ops channel ("Tick at HH:MM, N scanned, M built").
+
+State path: `${skillFolderRoot}/state/grain-poll.json`. Persisted between ticks. The wrapper must use file locking (e.g. `flock`) so two overlapping ticks do not double-build.
+
+### Pattern B: `/goal <condition>` (self-paced, until done)
+
+When you want to drain a backlog of transcripts collected ad hoc (e.g. the 50 last calls Baptiste mentioned in the daily sync):
+
+```
+/goal "all transcripts in /tmp/backlog-2026-06.tsv processed AND every emitted agent is either live or handoff"
+  invoke transcript-to-bap-coworker on each transcript
+  stop when goal met OR budget exhausted
+```
+
+The orchestrator self-paces: it picks the next transcript, runs the pipeline, marks done, loops until the goal condition evaluates true. No interval. The model decides when to stop based on the goal predicate, which is the natural pattern for batch backfills.
+
+`/goal` requires a goal predicate that can be evaluated from the orchestrator's persisted state (`coworkers.json`, `report.md`, the input list). Avoid open-ended goals ("until the team is happy"); they never terminate.
+
+### Coexistence
+
+Both patterns can run in parallel safely if they share the `${skillFolderRoot}/state/` directory and use the same `seen` dedup. Pattern A handles the steady stream of new calls; pattern B is invoked manually when you want to backfill or stress-test the pipeline.
+
+### What NOT to do
+
+- Run `/loop 5m` or shorter. Grain rate-limits and the pipeline can take 3 to 30 min per transcript; tighter cadence just produces overlap.
+- Run `/goal` without a measurable predicate. The model will either stop early or loop forever.
+- Skip the heartbeat. Without it, autonomous mode is a black box; you have to be able to see the loop is alive.
+
 ## Failure modes and where they live
 
 | Symptom | Where the bug is | Where to look |

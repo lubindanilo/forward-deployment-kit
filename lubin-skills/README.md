@@ -11,7 +11,9 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
 | [`parse-transcript-to-agent-spec`](parse-transcript-to-agent-spec/SKILL.md) | Read a sales / discovery transcript and emit a strict JSON spec describing the coworker(s) the conversation implies (goal, steps, tools, success criteria, test payloads). |
 | [`bap-coworker-test-loop`](bap-coworker-test-loop/SKILL.md) | Run + observe + patch loop: `coworker_run` -> `coworker_logs` -> eval -> `coworker_update` until the coworker passes every success criterion. Supports sandbox-redirect and act-then-cleanup strategies per integration. |
 | [`transcript-to-bap-coworker`](transcript-to-bap-coworker/SKILL.md) | Meta-skill that chains the four above into one pipeline: transcript -> spec -> custom MCP(s) if needed -> skill bundle -> coworker -> tested. The "finish the call, walk out with the agents live" loop. |
-| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + notification in `#technical-pr`) or `bap-feature-brainstorm` (3 options + decision question in `#brainstorming-produit`). The leaves live under `~/.claude/skills/`. |
+| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + notification in `#technical-pr`) or `bap-feature-brainstorm` (3 options + decision question in `#brainstorming-produit`). |
+| [`bap-bug-report`](bap-bug-report/SKILL.md) | SIMPLE leaf. Clones the bap repo, reproduces the bug live (Chrome MCP for UI), implements the quick fix on a branch, opens a PR, posts a short notification in `#technical-pr` with @Baptiste pinged. Embeds a `FINDING_CONTEXT` JSON block in the PR body for downstream verification. |
+| [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) | Closes the loop after a PR is merged + deployed. Three modes: A (re-run coworker, default), B (Chrome MCP visual repro), C (headless Playwright spec generated per finding and committed for permanent regression). Verdict on Pass: comments PR + closes finding. On Fail: opens a `regression after merge` finding via the router. |
 
 ## How they relate
 
@@ -38,8 +40,21 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
               |                |
               v                v
        bap-bug-report   bap-feature-brainstorm
-       (PR + Slack)     (3 options + Slack)
-        ~/.claude/        ~/.claude/
+       (PR + Slack +    (3 options + Slack)
+        FINDING_CONTEXT
+        in PR body)
+              |
+              v (after merge + deploy)
+       bap-post-deploy-verify
+       Mode A: re-run coworker
+       Mode B: Chrome MCP visual
+       Mode C: Playwright headless
+              |
+        +-----+------+
+        v            v
+    verified     regression
+    (close       (new finding ->
+     finding)     bap-finding-router)
 ```
 
 - **Tool-layer** skills: `build-mcp-for-bap` (HTTP MCP), `build-agents-for-bap` (coworker rules).
@@ -82,3 +97,23 @@ Routing:
 The router's classification grid is strict (lines changed, files touched, schema impact, breaking change, operator confidence). Findings that fail any criterion are COMPLEX by default; this keeps risky changes out of auto-merge territory and gives the team a chance to weigh in.
 
 This keeps the feedback loop tight between forward-deployment work and the HeyBap roadmap. If you fork this kit and run it on your own workspace, swap the leaf skills for your own equivalents (the router contract is generic; the leaves are environment-specific).
+
+## Closing the loop after merge
+
+Once a PR opened by `bap-bug-report` is merged and deployed, [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) goes back into HeyBap (or the bap code paths) and confirms the original finding is gone in prod. Three modes:
+
+- **Mode A** (default): re-runs the affected coworker via `mcp__bap__coworker_run`, diffs the new logs against the original run that surfaced the finding. Cheap, deterministic, suitable for the 80% of findings that touch coworker behaviour or backend code.
+- **Mode B**: drives heybap.com with the Claude-in-Chrome MCP, reproduces the finding scenario, captures before/after screenshots. Used when the finding lives in the UI.
+- **Mode C**: generates and runs a headless Playwright spec under [`bap-post-deploy-verify/playwright-tests/`](bap-post-deploy-verify/playwright-tests/). One spec per finding, committed for permanent CI regression. Reuses the QA visual pattern from the operator's `li-seo` project.
+
+On `verified`, the verifier comments the PR, labels it `post-deploy-verified`, and marks the finding closed. On `regression`, it opens a new finding (`regression after merge of #PR`) back through `bap-finding-router`. The loop is closed.
+
+## Autonomous mode (`/loop` and `/goal`)
+
+Three skills carry autonomous-mode sections:
+
+- [`transcript-to-bap-coworker`](transcript-to-bap-coworker/SKILL.md) supports `/loop 30m` for steady Grain polling and `/goal "<predicate>"` for batch backfills.
+- [`bap-finding-router`](bap-finding-router/SKILL.md) supports `/loop 60m` to drain a findings queue (`~/.claude/skills/bap-finding-router/queue.jsonl`) that upstream skills append to.
+- [`bap-coworker-test-loop`](bap-coworker-test-loop/SKILL.md) supports `/goal` wrapping for re-entering the loop after an upstream change (typically a `bap-post-deploy-verify` Mode A pass).
+
+A future meta-coworker `@agent-builder` scheduled on HeyBap is the natural host for these loops. See each skill's "Autonomous mode" section for the exact patterns and predicates.

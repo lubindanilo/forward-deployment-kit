@@ -152,6 +152,21 @@ If the human says "bug in HeyBap: when I click X, nothing happens", construct th
 
 The downstream skills must not invoke the router. The router is the entry; the downstream skills are leaves. If a downstream skill discovers a *second* finding during its investigation, it surfaces that to the caller (the router or the human), who can re-invoke the router on it.
 
+## Invocation from a scheduled meta-coworker (`/loop`)
+
+The router is the entry point for *findings*, not for transcripts. A scheduled meta-coworker (`@agent-builder` running every 30 minutes on HeyBap) can invoke the router for any unprocessed finding that other pipelines surfaced:
+
+```
+/loop 60m drain the findings queue
+  for each unprocessed entry in ${findingsQueue}:
+    invoke bap-finding-router with the entry
+    mark processed regardless of verdict (already-reported / dispatched / config-missing / low-confidence)
+```
+
+`${findingsQueue}` is a local file (`~/.claude/skills/bap-finding-router/queue.jsonl`) that upstream skills append to instead of invoking the router synchronously. This is the right pattern for high-volume pipelines where 5 runners observe the same bug: they append to the queue, the router drains at its own cadence, dedup catches duplicates once.
+
+The queue file becomes the in-flight dedup registry mentioned in the roadmap (axis #6 of the lubin-skills-map). One file replaces both.
+
 ## Anti-patterns
 
 - Calling `bap-bug-report` or `bap-feature-brainstorm` directly from a pipeline skill instead of going through the router. The router enforces classification + dedup + correct destination; bypassing it loses those.

@@ -1,0 +1,21 @@
+slack:
+  technical_pr_channel_id: "C0BBTDDQ6AJ"
+  baptiste_user_id: "U0A87JNV8QP"
+github_repo: "the-agentic-company/bap"
+deploy_check:
+  method: "github_deployments"            # or "health_endpoint"
+  health_endpoint: "https://heybap.com/api/health"
+  build_sha_jsonpath: "$.commit"
+  max_wait_minutes: 10
+chrome_mcp:
+  base_url: "https://heybap.com"
+playwright:
+  workspace: "lubin-skills/bap-post-deploy-verify"
+  base_url_env: "HEYBAP_URL"
+  storage_state_path: "~/.heybap-playwright-auth.json"
+  reporter: "json"
+loop:
+  cadence_minutes: 60
+  lookback_hours: 24
+  pr_label_verified: "post-deploy-verified"
+  pr_label_regression: "post-deploy-regression"

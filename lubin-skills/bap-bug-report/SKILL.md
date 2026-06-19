@@ -160,6 +160,28 @@ gh pr create \
 
 ## Repro
 <one line: where to click in https://heybap.com to see the bug; screenshot paths if any>
+
+<!-- FINDING_CONTEXT
+{
+  "hash": "<sha256 of canonical finding form: kind|title|first code_ref|originalRunId>",
+  "kind": "<bug or feature>",
+  "originalDescription": "<the one-line description that triggered the bug-report invocation>",
+  "affectedCoworker": "<@username if a specific coworker triggered the finding, else null>",
+  "affectedSurfaces": ["<chat | coworker-output | prompt-bar | settings | panel | attachment-ui | sandbox | mcp | runtime | none>"],
+  "originalRunId": "<bap run id where the finding fired, if applicable>",
+  "originalEvidence": [
+    { "kind": "code_ref", "value": "apps/web/src/components/prompt-bar.tsx:56" },
+    { "kind": "log_excerpt", "value": "<short quote, max 200 chars>" },
+    { "kind": "screenshot_path", "value": "/tmp/bug-report-...png" }
+  ],
+  "reproSteps": [
+    "<one short imperative line per step, max 10 steps>"
+  ],
+  "successCriteria": [
+    "<one assertion per line that the post-deploy verifier will check>"
+  ]
+}
+END_FINDING_CONTEXT -->
 EOF
 )"
 ```
@@ -167,6 +189,10 @@ EOF
 For features, add `--draft`. For bugs, non-draft.
 
 Capture the PR URL returned by `gh pr create`. You will need it for Step 8.
+
+**The `<!-- FINDING_CONTEXT ... -->` block is mandatory.** [bap-post-deploy-verify](../bap-post-deploy-verify/SKILL.md) reads it after merge to know what to re-test. Without the block, the verifier returns `verdict: "no-finding-context"` and the loop stays open. The block is hidden in the rendered PR view (HTML comment) so it does not pollute the review experience for humans.
+
+If the finding was passed to you with a pre-computed `hash`, use it verbatim. Otherwise compute it as `sha256(kind + "|" + title + "|" + first_code_ref_or_run_id)` so two findings on the same root cause produce the same hash.
 
 PR title rules:
 - Match the convention from recent merged PRs in `the-agentic-company/bap`: `<Area>: <verb> <object>`. Check `gh pr list --state merged --limit 10` if unsure.

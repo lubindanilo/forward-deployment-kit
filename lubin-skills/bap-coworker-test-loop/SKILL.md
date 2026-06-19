@@ -361,6 +361,24 @@ assistant.messages.last contains "Je ne peux pas..."
    -> Coworker refused. Inspect why; often missing input or wrong instruction phrasing.
 ```
 
+## `/goal` wrapper for cross-iteration loops
+
+The internal loop is cap-bound (N=5). Sometimes the right answer to a stubborn coworker is to re-enter the test loop *after* an upstream change (a new bundled script, a HeyBap merge that landed via `bap-post-deploy-verify`, a manual prompt rewrite). Wrap this skill in a `/goal` to drive that:
+
+```
+/goal "@coworker-slug passes every testPayload OR five wrapper attempts have run"
+  invoke bap-coworker-test-loop on @coworker-slug
+  between attempts: pull latest agentSpec from disk, refresh test_env, re-inject overlay
+```
+
+Use this pattern when:
+
+- A `bap-post-deploy-verify` Mode A run flipped a regression to verified and you want to confirm the related coworker is green again.
+- You manually edited the coworker's bundled script and want a fast re-validation.
+- A `bap-feature-brainstorm` decision was implemented and the merged PR should now make a previously-handoff coworker pass.
+
+Do not use `/goal` for the internal iteration. The cap-bound loop with diagnostic patches is already the right tool inside one wrapper attempt; `/goal` is the *outer* loop that re-enters after an upstream change.
+
 ## When NOT to use this skill
 
 - Coworker has no `testPayloads` and no `successCriteria`. The loop has nothing to do. Add criteria to the spec first.
