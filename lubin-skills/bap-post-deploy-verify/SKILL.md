@@ -4,40 +4,42 @@ description: |
   Close the feedback loop after a PR has been merged on
   `the-agentic-company/bap` and deployed to production. Re-validates that
   the original finding (the one that triggered the PR) is actually fixed
-  in prod. Three modes, chosen per finding: Mode A (re-run the affected
-  coworker via `mcp__bap__coworker_run`, diff the logs), Mode B (drive
-  heybap.com via the Claude-in-Chrome MCP, reproduce the scenario,
-  capture before/after screenshots), Mode C (run a generated Playwright
-  spec in headless Chromium). Default Mode A. On pass, comments the PR
-  and closes the finding. On fail, opens a `regression after merge`
-  finding via `bap-finding-router`. Use when a PR opened by
-  `bap-bug-report` has been merged and you want autonomous validation
-  before declaring the loop closed.
+  in prod, then **transitions the linked Linear ticket (team `Bap`) to
+  `Live`** with a verification comment. On regression, opens a new Linear
+  ticket via `bap-finding-router` (labelled `Regression`, linked back via
+  `relatedTo`). Three verification modes, chosen per finding: Mode A
+  (re-run the affected coworker via `mcp__bap__coworker_run`, diff the
+  logs), Mode B (drive heybap.com via the Claude-in-Chrome MCP, reproduce
+  the scenario, capture before/after screenshots), Mode C (run a generated
+  Playwright spec in headless Chromium). Default Mode A. Use when a PR
+  opened by `bap-bug-report` has been merged and you want autonomous
+  validation before declaring the loop closed.
 ---
 
 # Post-deploy verification for `the-agentic-company/bap`
 
-The loop that `bap-finding-router` and `bap-bug-report` start has, until now, ended at "PR opened". This skill closes it. After a merge, it goes back into HeyBap (or the bap code paths) and confirms that the original finding is actually gone in prod.
+The loop that `bap-finding-router` and `bap-bug-report` start has, until now, ended at "PR opened + Linear ticket at `In Review`". This skill closes it. After a merge, it goes back into HeyBap (or the bap code paths) and confirms that the original finding is actually gone in prod, then transitions the Linear ticket to `Live` (a completed-type status meaning "shipped and verified").
 
-Without this skill the pipeline ships PRs blind. With it, every PR is paired with a verification step whose verdict is recorded, and regressions are detected automatically.
+Without this skill the pipeline ships PRs blind. With it, every PR is paired with a verification step whose verdict is recorded on the Linear ticket, and regressions create a new ticket automatically.
 
 ## When to invoke
 
 - A PR opened by `bap-bug-report` has been merged on `the-agentic-company/bap` and the deploy is live.
 - An operator wants to spot-check that a recent merge fixed what it claimed to fix.
-- A scheduled `/loop` over the last 24h of merged PRs that did not get a verdict yet.
+- A scheduled `/loop` over Linear tickets in `In Review` whose linked PR has been merged but not yet verified.
 
 Do not invoke when:
 
 - The PR has not been merged yet (no point verifying a draft).
-- The PR has been merged but not deployed (Vercel build still running on bap). Wait for deploy.
-- The PR has no `finding_hash` embedded in its body and no operator-supplied finding context. There is nothing to verify against.
+- The PR has been merged but not deployed (build still running on bap). Wait for deploy.
+- The PR carries no `BAP-<n>` identifier AND no operator-supplied finding context. There is nothing to verify against.
 
 ## Input contract
 
 ```json
 {
   "prUrl": "https://github.com/the-agentic-company/bap/pull/123",
+  "linearTicketIdentifier": "BAP-456",
   "findingContext": {
     "hash": "<sha256 of canonical finding form>",
     "kind": "bug | feature",
@@ -58,30 +60,38 @@ Do not invoke when:
 }
 ```
 
-If `findingContext` is missing, the skill tries to extract it from the PR body. `bap-bug-report` embeds it as an HTML comment of the form:
+`findingContext` is resolved in this order:
 
-```html
-<!-- FINDING_CONTEXT
-{ "hash": "...", "kind": "bug", "originalDescription": "...", ... }
-END_FINDING_CONTEXT -->
-```
+1. Inline in the input.
+2. From the linked Linear ticket description (the `<!-- FINDING_CONTEXT … END_FINDING_CONTEXT -->` block written by `bap-bug-report` at Step 6 of its flow). Call `mcp__linear__get_issue({ id: "BAP-<n>" })` and parse the description.
+3. From the PR body (legacy fallback for tickets opened before the Linear refactor).
 
-If neither input nor PR body has it, the skill refuses to run and returns `verdict: "no-finding-context"`. No silent guessing.
+If none of the three yields a context, the skill refuses to run and returns `verdict: "no-finding-context"`. No silent guessing.
+
+`linearTicketIdentifier` is resolved in this order:
+
+1. Inline in the input.
+2. From the PR title (it starts with `BAP-<n>` per the `bap-bug-report` convention).
+3. From the PR body (the `Closes BAP-<n>` line).
+
+If none yields an identifier, the verifier still runs but skips Step 4's Linear transition and returns `verdict: "verified-without-ticket"` so the operator can attach it manually.
 
 ## Step 1 — confirm merge + deploy
 
 ```bash
-gh pr view <num> --repo the-agentic-company/bap --json mergedAt,state,mergeCommit,baseRefName,headRefName
+gh pr view <num> --repo the-agentic-company/bap --json mergedAt,state,mergeCommit,baseRefName,headRefName,title,body
 ```
 
 If `state != "MERGED"`, abort. Return `verdict: "not-merged"`.
+
+Extract `BAP-<n>` from `title` (regex `^BAP-(\d+)`) or from `body` (regex `Closes BAP-(\d+)`). Store as `linearTicketIdentifier`.
 
 Then verify the deploy. HeyBap is not on Vercel (per `bap-bug-report` rule, line 90 of its SKILL.md), so the deploy signal is project-specific. Two paths:
 
 1. **GitHub deployments API**: `gh api repos/the-agentic-company/bap/deployments?ref=<mergeCommit>` and check the latest `state == "success"` and `environment == "production"`. Wait up to 10 minutes (poll every 30s) if pending.
 2. **Production health probe**: `curl -sf https://heybap.com/api/health` (or whichever endpoint the bap repo exposes; grep `apps/web/src/routes/api/health` for the canonical path). If the response includes a commit SHA, compare against `mergeCommit`.
 
-If after 10 minutes the deploy has not landed, return `verdict: "deploy-pending"` and surface a Slack note in `#technical-pr` so a human can re-trigger later.
+If after 10 minutes the deploy has not landed, return `verdict: "deploy-pending"` and post a Linear comment on the ticket (`mcp__linear__save_comment({ issueId: "BAP-<n>", body: "Deploy pending after 10 min, will retry in 60 min." })`) so the team is notified without spamming. A human can re-trigger later.
 
 ## Step 2 — pick the validation mode
 
@@ -136,8 +146,7 @@ await mcp__Claude_in_Chrome__navigate({ url: "https://heybap.com" });
 
 // 1. Reproduce the original scenario step-by-step
 // Steps come from findingContext.originalEvidence or, if not present,
-// from a short prose recipe also embedded in the PR body by bap-bug-report
-// under <!-- REPRO_STEPS ... END_REPRO_STEPS -->
+// from a short prose recipe also embedded in the Linear ticket description
 
 for (const step of reproSteps) {
   await execute(step);  // mcp__Claude_in_Chrome__navigate / find / form_input / etc.
@@ -207,14 +216,28 @@ Reuse setup:
 
 Possible verdicts and actions:
 
-| Verdict | Action |
-|---------|--------|
-| `verified` | Comment on the PR (`gh pr comment <num> --body "..."` with the verification details and screenshots / log links). Notify `#technical-pr` (one-liner). If a `bap-finding-router` registry exists, mark the finding as closed. |
-| `regression` | Open a new finding via `bap-finding-router` with `kind: "bug"`, title `regression after merge of #PR-<num>: <original description>`. Include the new evidence (logs, screenshots, Playwright report) in `findingContext.evidence`. Slack `#technical-pr` with the new finding link. |
-| `no-finding-context` | Stop. Notify the operator (return-to-user) that the PR body does not carry the embedded JSON block. Suggest re-opening the PR via `bap-bug-report` with the context, or invoking this skill with the context inline. |
-| `deploy-pending` | Schedule a re-invocation in 10 minutes (`/loop 10m` pattern, see "Autonomous mode" below). Notify Slack once with the deferral. |
-| `not-merged` | Stop. Return-to-user: PR is not merged. |
-| `flake` | The same run failed differently than the original finding. Surface to operator, do not auto-close, do not open regression (avoid spam). |
+| Verdict | Linear actions | GitHub actions |
+|---------|----------------|----------------|
+| `verified` | Comment on the ticket with the verification details (mode used, new run id or screenshot paths, Playwright report path). Then transition the ticket to `Live` (`mcp__linear__save_issue({ id: "BAP-<n>", state: "<live_status_id>" })`). | Comment on the PR (`gh pr comment <num> --body "..."`) summarising the verification. Add label `post-deploy-verified` to the PR for idempotency. |
+| `regression` | Invoke `bap-finding-router` with `kind: "bug"`, title `(Regression) merge of BAP-<n>: <original description>`, evidence including new logs / screenshots / Playwright report. The router dispatches to `bap-bug-report` (or `bap-feature-brainstorm` if the regression is structural), which creates a new Linear ticket. Then comment on the original ticket: `Regression detected: see BAP-<new>` and leave its status as `Live` if it was already there, otherwise as `In Review`. The new ticket is linked via `relatedTo` automatically by passing it in the `save_issue` call. | Label the PR `post-deploy-regression`. Comment on the PR with a link to the new Linear ticket. |
+| `no-finding-context` | No-op. | Stop. Notify the operator (return-to-user) that neither the input, the Linear ticket description, nor the PR body carries the FINDING_CONTEXT block. Suggest re-opening the PR via `bap-bug-report` with the context, or invoking this skill with the context inline. |
+| `deploy-pending` | Comment on the ticket: `Deploy pending after 10 min, retrying in 60 min.` Schedule a re-invocation (`/loop` pattern, see "Autonomous mode" below). | No-op. |
+| `not-merged` | No-op. | Stop. Return-to-user: PR is not merged. |
+| `flake` | Comment on the ticket: `Flake detected (different failure pattern). Operator review needed before close.` Do not transition status. Do not open a regression ticket. | Label the PR `post-deploy-flake`. |
+| `verified-without-ticket` | No-op (no ticket to update). | Same as `verified` (PR comment + label). Return-to-user surfaces the missing Linear identifier so the operator can attach manually. |
+
+The Linear comment body for `verified` looks like:
+
+```markdown
+Post-deploy verified by `bap-post-deploy-verify` (mode <A|B|C>).
+
+- mergeCommit: <sha>
+- newRunId: <bap run id>          (Mode A)
+- screenshots: <paths>             (Mode B)
+- playwrightReport: <path>          (Mode C)
+
+Ticket transitioned to `Live`.
+```
 
 ## Step 5 — return to caller
 
@@ -222,47 +245,78 @@ Structured return value:
 
 ```json
 {
-  "verdict": "verified | regression | no-finding-context | deploy-pending | not-merged | flake",
+  "verdict": "verified | regression | no-finding-context | deploy-pending | not-merged | flake | verified-without-ticket",
   "prUrl": "...",
   "mergeCommit": "...",
   "modeUsed": "A | B | C",
+  "linearTicketIdentifier": "BAP-456",
+  "linearTicketUrl": "https://linear.app/heybap/issue/BAP-456",
+  "linearCommentUrl": "...",
+  "linearNewTicketForRegression": "BAP-789",
   "newRunId": "<bap run id if Mode A>",
   "screenshotPaths": ["..."],
   "playwrightReport": "/tmp/...",
   "prCommentUrl": "...",
-  "slackPermalink": "...",
-  "newFindingForRouter": "<finding object if verdict == regression>",
   "diagnosticNotes": "<1-2 lines for the human if verdict != verified>"
 }
 ```
 
 ## Autonomous mode
 
-This skill is the leaf of the post-merge half of the pipeline. To run it autonomously over a fleet of recent merges:
+This skill is the leaf of the post-merge half of the pipeline. To run it autonomously over a fleet of recent merges, query Linear directly for tickets that are due for verification:
 
 ```
-/loop 60m invoke bap-post-deploy-verify on the latest merged-but-unverified PR
+/loop 60m invoke bap-post-deploy-verify on each ticket in BAP whose linked PR is merged but ticket still at `In Review`
 ```
 
 Concretely the `/loop` wrapper runs every 60 minutes:
 
+```ts
+const tickets = await mcp__linear__list_issues({
+  team: "BAP",
+  state: "In Review",          // status id from config
+  updatedAt: "-P3D",            // updated within the last 3 days, captures the merge event
+  limit: 50
+});
+
+for (const ticket of tickets) {
+  const full = await mcp__linear__get_issue({ id: ticket.id });
+  // Find a GitHub PR link attachment whose state is MERGED
+  const prUrl = pickMergedPrFromAttachments(full);
+  if (!prUrl) continue;
+  // Check it has not been verified yet by reading existing comments for the
+  // "Post-deploy verified by" marker
+  const comments = await mcp__linear__list_comments({ issueId: ticket.id });
+  if (comments.some(c => c.body.includes("Post-deploy verified by `bap-post-deploy-verify`"))) continue;
+  // Run the verifier
+  await invoke("bap-post-deploy-verify", { prUrl, linearTicketIdentifier: ticket.identifier });
+}
+```
+
+A secondary fallback queries GitHub directly to catch PRs whose Linear attachment did not propagate (Linear's GitHub integration is best-effort):
+
 ```bash
-gh pr list --repo the-agentic-company/bap --state merged --limit 20 --json number,mergedAt,body,labels \
+gh pr list --repo the-agentic-company/bap --state merged --limit 20 --json number,title,mergedAt,labels \
   --search "is:merged merged:>$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ) -label:post-deploy-verified"
 ```
 
-For each PR returned, this skill is invoked with the PR URL. On `verified`, the PR is labelled `post-deploy-verified` (`gh pr edit <num> --add-label post-deploy-verified`). On `regression`, the label is `post-deploy-regression` and the new finding's link is posted on the PR thread.
-
-The 60m cadence balances Vercel deploy latency with not waiting too long for verification. Adjust if your stack deploys faster.
+The 60m cadence balances deploy latency with not waiting too long for verification. Adjust if your stack deploys faster.
 
 ## Config
 
 `lubin-skills/bap-post-deploy-verify/config.yaml`:
 
 ```yaml
-slack:
-  technical_pr_channel_id: "C0BBTDDQ6AJ"
-  baptiste_user_id: "U0A87JNV8QP"
+linear:
+  team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
+  team_key: "BAP"
+  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste
+  labels:
+    regression: "325fae29-9f90-4f2b-bd59-7752e5a35b49"
+    dogfooding: "50b28f0f-60be-460d-9db1-bd2e03e79f42"
+  statuses:
+    in_review: "423d89b9-126c-4db1-aa27-05b25baafd20"
+    live: "1a4d7932-5cb0-409a-8bcc-33d4bcf23bb8"
 github_repo: "the-agentic-company/bap"
 deploy_check:
   method: "github_deployments | health_endpoint"
@@ -281,7 +335,10 @@ loop:
   lookback_hours: 24
   pr_label_verified: "post-deploy-verified"
   pr_label_regression: "post-deploy-regression"
+  pr_label_flake: "post-deploy-flake"
 ```
+
+Keep the Linear ids in sync with `lubin-skills/bap-finding-router/config.yaml` (canonical source).
 
 ## Anti-patterns
 
@@ -289,14 +346,15 @@ loop:
 - Generating a fresh Playwright spec every time for the same finding. The point of Mode C is the spec becomes a permanent CI artefact; if it already exists, run it, do not regenerate.
 - Closing a finding on a `flake` verdict. Flakes are not validation; surface them, never silently treat them as pass.
 - Trusting `gh pr view` for deploy status. Merge != deploy. Always check the deploy signal explicitly (Step 1).
-- Posting a regression to Slack without also opening a `bap-finding-router` finding. The Slack ping is a notification; the finding is the unit of work.
+- Posting a regression to Slack without also opening a Linear ticket via `bap-finding-router`. The Linear ticket is the unit of work; Slack is a notification surface Linear drives on its own.
+- Transitioning the ticket to `Live` before the verification actually passed. `Live` is reserved for verified-in-prod.
 - Running this skill on a PR that was not opened by `bap-bug-report` and that has no manually-supplied finding context. The skill is not a generic E2E test runner; without a finding to verify against, the output is noise.
 - Letting Playwright auth state expire silently. The skill should fail loud (`verdict: "playwright-auth-expired"`) and ask the operator to re-run `playwright codegen`.
 
 ## See also
 
 - [bap-finding-router](../bap-finding-router/SKILL.md): receives `regression` findings from this skill.
-- [bap-bug-report](../bap-bug-report/SKILL.md): opens the PRs this skill verifies. Must embed `<!-- FINDING_CONTEXT ... -->` in PR body for context to flow.
+- [bap-bug-report](../bap-bug-report/SKILL.md): creates the Linear tickets this skill verifies. Must embed `<!-- FINDING_CONTEXT ... -->` in the ticket description (Step 6 of its flow) for context to flow.
 - [bap-coworker-test-loop](../bap-coworker-test-loop/SKILL.md): the eval engine for Mode A reuses its `successCriteria` interpreter.
 - [transcript-to-bap-coworker](../transcript-to-bap-coworker/SKILL.md): the orchestrator that originally surfaced the findings being verified here.
 - `vault/projects/li-seo/qa-visual/` (in the operator's vault): the reference Playwright + Python pattern this skill borrows from.

@@ -397,7 +397,7 @@ Do not use `/goal` for the internal iteration. The cap-bound loop with diagnosti
 
 ## Report HeyBap bugs and feature gaps
 
-The test loop is the most concentrated source of HeyBap-side signal in the pipeline. Every iteration that *patches around* a platform misbehaviour is a finding you should report. Invoke [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies the finding (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap`, notifies `#technical-pr`) or `bap-feature-brainstorm` (posts a 3-options problem statement in `#brainstorming-produit`). One finding equals one invocation. Do not invoke the leaf skills directly.
+The test loop is the most concentrated source of HeyBap-side signal in the pipeline. Every iteration that *patches around* a platform misbehaviour is a finding you should report. Invoke [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies the finding (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap` and creates a Linear ticket in team `Bap` at status `In Review` linked to the PR) or `bap-feature-brainstorm` (creates a Linear ticket in team `Bap` at status `Triage` with label `Need More Shaping` carrying the 3-options problem statement). Linear's own integrations notify the team; no direct Slack post. One finding equals one invocation. Do not invoke the leaf skills directly.
 
 Specific triggers from this skill:
 

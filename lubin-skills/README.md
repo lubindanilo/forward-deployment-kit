@@ -11,9 +11,9 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
 | [`parse-transcript-to-agent-spec`](parse-transcript-to-agent-spec/SKILL.md) | Read a sales / discovery transcript and emit a strict JSON spec describing the coworker(s) the conversation implies (goal, steps, tools, success criteria, test payloads). |
 | [`bap-coworker-test-loop`](bap-coworker-test-loop/SKILL.md) | Run + observe + patch loop: `coworker_run` -> `coworker_logs` -> eval -> `coworker_update` until the coworker passes every success criterion. Supports sandbox-redirect and act-then-cleanup strategies per integration. |
 | [`transcript-to-bap-coworker`](transcript-to-bap-coworker/SKILL.md) | Meta-skill that chains the four above into one pipeline: transcript -> spec -> custom MCP(s) if needed -> skill bundle -> coworker -> tested. The "finish the call, walk out with the agents live" loop. |
-| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + notification in `#technical-pr`) or `bap-feature-brainstorm` (3 options + decision question in `#brainstorming-produit`). |
-| [`bap-bug-report`](bap-bug-report/SKILL.md) | SIMPLE leaf. Clones the bap repo, reproduces the bug live (Chrome MCP for UI), implements the quick fix on a branch, opens a PR, posts a short notification in `#technical-pr` with @Baptiste pinged. Embeds a `FINDING_CONTEXT` JSON block in the PR body for downstream verification. |
-| [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) | Closes the loop after a PR is merged + deployed. Three modes: A (re-run coworker, default), B (Chrome MCP visual repro), C (headless Playwright spec generated per finding and committed for permanent regression). Verdict on Pass: comments PR + closes finding. On Fail: opens a `regression after merge` finding via the router. |
+| [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + Linear ticket in team `Bap` at status `In Review`) or `bap-feature-brainstorm` (Linear ticket at status `Triage` with label `Need More Shaping` carrying problem + 3 options + decision question). Linear's own integrations notify the team; no direct Slack post. |
+| [`bap-bug-report`](bap-bug-report/SKILL.md) | SIMPLE leaf. Clones the bap repo, reproduces the bug live (Chrome MCP for UI), creates a Linear ticket in team `Bap` to get an identifier (`BAP-<n>`), implements the quick fix on a branch named `fix/bap-<n>-slug`, opens a PR titled `BAP-<n> <Area>: …`, then transitions the Linear ticket to `In Review` and attaches the PR. Embeds a `FINDING_CONTEXT` JSON block in the Linear ticket description for downstream verification. |
+| [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) | Closes the loop after a PR is merged + deployed. Three modes: A (re-run coworker, default), B (Chrome MCP visual repro), C (headless Playwright spec generated per finding and committed for permanent regression). Verdict on Pass: comments the Linear ticket and transitions it to `Live` (completed-type status). On Fail: opens a new Linear ticket via `bap-finding-router` labelled `Regression` and linked to the original via `relatedTo`. |
 
 ## How they relate
 
@@ -40,9 +40,11 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
               |                |
               v                v
        bap-bug-report   bap-feature-brainstorm
-       (PR + Slack +    (3 options + Slack)
-        FINDING_CONTEXT
-        in PR body)
+       (Linear BAP-<n>  (Linear BAP-<n>
+        at In Review     at Triage with
+        + PR opened      Need More Shaping
+        + FINDING_CONTEXT label, 3 options
+        in ticket body)  in body)
               |
               v (after merge + deploy)
        bap-post-deploy-verify
@@ -53,8 +55,10 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
         +-----+------+
         v            v
     verified     regression
-    (close       (new finding ->
-     finding)     bap-finding-router)
+    (transition  (new finding ->
+     ticket to    bap-finding-router,
+     Live)        Regression label,
+                  relatedTo original)
 ```
 
 - **Tool-layer** skills: `build-mcp-for-bap` (HTTP MCP), `build-agents-for-bap` (coworker rules).
@@ -130,8 +134,8 @@ Each pipeline skill (`parse-transcript-to-agent-spec`, `bap-coworker-test-loop`,
 
 Routing:
 
-- **SIMPLE** (small diff, single surface, low design risk, operator confidence >= 0.8): the router dispatches to `bap-bug-report` (in `~/.claude/skills/bap-bug-report/`), which clones `the-agentic-company/bap`, implements the quick fix on a branch, opens a PR, and posts a short notification in `#technical-pr` with @Baptiste pinged.
-- **COMPLEX** (multi-surface, data model touched, design choice with multiple defensible answers): the router dispatches to `bap-feature-brainstorm` (in `~/.claude/skills/bap-feature-brainstorm/`), which posts problem + 3 options + decision question in `#brainstorming-produit`. The team picks; the implementation then goes through `bap-bug-report` in a follow-up.
+- **SIMPLE** (small diff, single surface, low design risk, operator confidence >= 0.8): the router dispatches to `bap-bug-report` (in `lubin-skills/bap-bug-report/`), which creates a Linear ticket in team `Bap` to claim a `BAP-<n>` identifier, clones `the-agentic-company/bap`, implements the quick fix on a branch named `fix/bap-<n>-slug`, opens a PR titled `BAP-<n> <Area>: …`, then transitions the Linear ticket to `In Review` with the PR attached. Linear's GitHub integration auto-links the branch + PR via the identifier; Linear's Slack / email notifications cover the team.
+- **COMPLEX** (multi-surface, data model touched, design choice with multiple defensible answers): the router dispatches to `bap-feature-brainstorm` (in `~/.claude/skills/bap-feature-brainstorm/`), which creates a Linear ticket in team `Bap` at status `Triage` with labels `Need More Shaping` + (`Bug` or `Feature`) + `Dogfooding`, containing the problem + 3 options + decision question. The team picks on the ticket; the implementation then goes through `bap-bug-report` in a follow-up that opens its own ticket linked back to the brainstorm via `relatedTo`.
 
 The router's classification grid is strict (lines changed, files touched, schema impact, breaking change, operator confidence). Findings that fail any criterion are COMPLEX by default; this keeps risky changes out of auto-merge territory and gives the team a chance to weigh in.
 

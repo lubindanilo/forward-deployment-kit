@@ -331,7 +331,7 @@ If `goal` or `steps[]` can't be derived at all, do not emit the agent. Push it t
 
 ## Report HeyBap bugs and feature gaps
 
-This skill reads transcripts in a way that surfaces what the platform *cannot* do today. Every time you encounter a HeyBap capability gap or a misbehaviour, invoke [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies the finding (SIMPLE vs COMPLEX) and dispatches to the right leaf: `bap-bug-report` for SIMPLE (opens a PR on `the-agentic-company/bap`, notifies `#technical-pr`) or `bap-feature-brainstorm` for COMPLEX (posts a 3-options problem statement in `#brainstorming-produit`). One finding equals one invocation. Do not invoke `bap-bug-report` or `bap-feature-brainstorm` directly from this skill; the router is the only entry point.
+This skill reads transcripts in a way that surfaces what the platform *cannot* do today. Every time you encounter a HeyBap capability gap or a misbehaviour, invoke [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies the finding (SIMPLE vs COMPLEX) and dispatches to the right leaf: `bap-bug-report` for SIMPLE (opens a PR on `the-agentic-company/bap` and creates a Linear ticket in team `Bap` at status `In Review` linked to the PR) or `bap-feature-brainstorm` for COMPLEX (creates a Linear ticket in team `Bap` at status `Triage` with label `Need More Shaping` containing the 3-options problem statement). Linear's own integrations notify the team; no direct Slack post. One finding equals one invocation. Do not invoke `bap-bug-report` or `bap-feature-brainstorm` directly from this skill; the router is the only entry point.
 
 Specific triggers from this skill:
 

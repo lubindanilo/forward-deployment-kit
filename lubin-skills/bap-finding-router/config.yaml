@@ -1,8 +1,30 @@
-slack:
-  technical_pr_channel_id: "C0BBTDDQ6AJ"          # #technical-pr, used by bap-bug-report dispatch
-  brainstorm_channel_id: "REPLACE_WITH_CREATED_CHANNEL_ID"  # #brainstorming-produit, set after channel creation
-  baptiste_user_id: "U0A87JNV8QP"
-slack_workspace: "The Agentic Company"
+linear:
+  team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"        # team "Bap" (key BAP)
+  team_key: "BAP"
+  default_project_id: null                               # optional, e.g. a "Roadmap" project id; null = no default project
+  baptiste_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"
+  louis_user_id: "90938296-0e91-4439-9c53-b939cd975d20"
+  lubin_user_id: "8fc555af-50cd-4093-9878-92f6f08e6d96"
+  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste (CTO)
+  labels:
+    bug: "e356eade-cc41-4abb-9447-00487b30583c"
+    feature: "296529af-3672-4bd7-876d-64245d40c768"
+    improvement: "c3a89ed7-2e23-4a60-b46d-ee7cab2f7c48"
+    regression: "325fae29-9f90-4f2b-bd59-7752e5a35b49"
+    need_more_shaping: "aec20ab1-873c-400c-9466-747706a58b1d"
+    dogfooding: "50b28f0f-60be-460d-9db1-bd2e03e79f42"
+    ui_ux: "848839d8-15da-440a-96e1-02e725dc153d"
+    customer_request: "a12bb555-9ec3-423e-a46d-cdf307062472"
+  statuses:
+    triage: "b63fe240-0351-4011-a754-3b69c3cc5c99"        # backlog type, "Triage"
+    backlog: "b73159ec-971a-461d-bfea-f21c7263a696"
+    in_review: "423d89b9-126c-4db1-aa27-05b25baafd20"     # started type, used when a PR is opened
+    in_progress: "2494a4a4-9b9a-4cff-a4b6-91d499dcf4d2"
+    done: "1225d057-5ac2-40fe-a7c0-72b95293947a"
+    live: "1a4d7932-5cb0-409a-8bcc-33d4bcf23bb8"          # completed type, used after post-deploy verify pass
+    duplicate: "5a5d3750-298a-487b-bfd4-97bc349058fd"
+    canceled: "064299ba-e4ba-4658-824e-85bd3027df07"
 github_repo: "the-agentic-company/bap"
 investigation_time_cap_minutes: 5
 confidence_floor: 0.6
+dedup_window_days: 60

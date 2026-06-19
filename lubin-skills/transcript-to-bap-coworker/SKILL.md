@@ -465,9 +465,14 @@ Emit one Markdown report to the human via the handoff channel and to disk at `${
 
 ## Ambiguities surfaced by the parser
 - ${ambiguity.topic} - needs decision: ${ambiguity.options.join(' / ')}
+
+## HeyBap findings dispatched ({findings.length})
+- **BAP-${ticket.identifier}** ({simple|complex}) - ${finding.title}
+  ${ticketUrl} (state: In Review | Triage)
+  PR: ${prUrl}                       (only when SIMPLE; absent for COMPLEX brainstorms)
 ```
 
-This is the artefact a human reviews. Everything in the pipeline is auditable from this report.
+This is the artefact a human reviews. Everything in the pipeline is auditable from this report. The "HeyBap findings dispatched" section consolidates the `bap-finding-router` return values from every pipeline step; each entry maps one-to-one with a Linear ticket in team `Bap`.
 
 ## Resume after human action
 
@@ -541,7 +546,7 @@ Both patterns can run in parallel safely if they share the `${skillFolderRoot}/s
 
 ## Report HeyBap bugs and feature gaps (mandatory, all steps)
 
-The orchestrator is the only place in the pipeline that touches HeyBap at every level: spec extraction, MCP scaffolding and binding, skill upload, coworker creation, run / log / update, panel rendering, report persistence. You see the whole stack misbehave or fail to expose a needed capability. Surface every finding through [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap`, notifies `#technical-pr`) or `bap-feature-brainstorm` (posts a 3-options problem statement in `#brainstorming-produit`).
+The orchestrator is the only place in the pipeline that touches HeyBap at every level: spec extraction, MCP scaffolding and binding, skill upload, coworker creation, run / log / update, panel rendering, report persistence. You see the whole stack misbehave or fail to expose a needed capability. Surface every finding through [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap` and creates a Linear ticket in team `Bap` at status `In Review` linked to the PR) or `bap-feature-brainstorm` (creates a Linear ticket in team `Bap` at status `Triage` with label `Need More Shaping` carrying the 3-options problem statement). Linear's own integrations notify the team; no direct Slack post.
 
 One finding equals one invocation. A one-line description is enough; the router and its downstream skills do the deep investigation themselves. Do not invoke the leaf skills directly; do not batch findings; do not wait until "the end of the pipeline"; do not silently route around. Baptiste asked explicitly for tight feedback in the 2026-06-18 daily sync, and the orchestrator is the most concentrated source of HeyBap signal that exists.
 
@@ -554,7 +559,7 @@ Triggers per step:
 - **Step 4 (`skill_add`).** Returns 200 but the skill is not immediately visible to coworkers (async indexing window not documented). Bug or doc gap. `skill_add` cannot replace an existing skill with the same slug without manual delete first: feature request.
 - **Step 5 (`coworker_create`).** Rejects unknown `workspaceMcpServerIds` silently or with an opaque error: bug. No way to attach the `agentSpec` JSON as first-class coworker metadata (every run regenerates the test overlay from the on-disk spec file): feature request. `coworker_create` does not accept a `schedule` matching the spec's `triggers[].spec` shape one-to-one: surface the gap.
 - **Step 6 (test loop).** Whatever `bap-coworker-test-loop` would otherwise surface (see its own section).
-- **Step 7 (report).** The final report cannot be persisted as a HeyBap entity; it lands in Slack and on disk only. Feature request: a `coworker.buildReport` first-class object queryable from the UI.
+- **Step 7 (report).** The final report cannot be persisted as a HeyBap entity; it lands in the operator's handoff channel and on disk only. Linear holds the individual findings but not the build summary. Feature request: a `coworker.buildReport` first-class object queryable from the UI.
 - **Resume after human action.** No webhook from HeyBap to notify the orchestrator that the workspace MCP bind happened. Feature request.
 
 If at any step you find yourself writing a comment like "TODO: HeyBap should support X" in code or in the report, that comment is the bug report. File it.

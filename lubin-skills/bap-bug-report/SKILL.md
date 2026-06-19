@@ -3,26 +3,29 @@ name: bap-bug-report
 description: |
   Deeply analyse a bug or feature request in the Bap repo
   (the-agentic-company/bap), implement the fix on a branch, open a Pull
-  Request on GitHub, and autonomously post the PR link to Slack
-  #technical-pr (workspace: The Agentic Company) with @Baptiste pinged.
-  Use when the user describes a bug or feature gap in Bap / Heybap (chat,
-  coworker output, attachments, MCP, skills UI, run flow…) and wants the
-  fix proposed as a PR to the CTO without manual copy-paste. Triggers:
-  "Bug: …", "Feature: …", "explain this to Baptiste", "open a PR for …",
-  "audit the bug …".
+  Request on GitHub, and create a Linear ticket in team `Bap` (key BAP)
+  at status `In Review`, labelled `Bug` (or `Feature`) + `Dogfooding`,
+  assigned to Baptiste, with the PR attached as a link. Linear's
+  notifications (Slack integration, email, in-app) replace any direct
+  Slack post. Use when the user describes a bug or feature gap in Bap
+  / HeyBap (chat, coworker output, attachments, MCP, skills UI, run
+  flow…) and wants the fix proposed as a PR + a tracked Linear ticket
+  without manual copy-paste. Triggers: "Bug: …", "Feature: …", "ouvre
+  un ticket pour …", "open a PR for …", "audit the bug …".
 ---
 
-# Bap bug / feature → PR + Slack notification
+# Bap bug / feature → PR + Linear ticket
 
-Goal: the user gives a short one-line bug or feature description; you investigate the Bap codebase in depth; you **implement the fix on a branch in `the-agentic-company/bap` and open a Pull Request**; you then post a short notification in Slack `#technical-pr` (workspace **The Agentic Company**), pinging **Baptiste (CTO)** at the start.
+Goal: the user gives a short one-line bug or feature description; you investigate the Bap codebase in depth; you **create a Linear ticket in team `Bap` first to obtain its identifier (e.g. `BAP-123`), then implement the fix on a branch in `the-agentic-company/bap`, open a Pull Request that references the ticket identifier in its title, and update the Linear ticket to status `In Review` with the PR attached as a link**.
 
-No more direct Slack post in `#bugs` or `#feature-request`. The PR is the report. Slack only notifies.
+The Linear ticket is the report. Linear's own integrations notify the team on create / update; no direct Slack post is sent from this skill.
 
 ## Repo & context (always)
 
 - GitHub: https://github.com/the-agentic-company/bap
 - Owner: `the-agentic-company`.
 - CTO: Baptiste. The user (Lubin) is Chief of Staff at Hyperstack/CmdClaw and uses Bap heavily as a power user.
+- Linear team: **Bap** (key `BAP`), workspace `heybap` (https://linear.app/heybap).
 - Codebase layout (monorepo):
   - `apps/web/` — Next.js frontend (chat, coworker UIs, prompt bar, attachments, settings).
   - `packages/core/` — server services (sandbox, file service, orpc routers like `generation.startGeneration`, `coworker.trigger`).
@@ -32,8 +35,8 @@ No more direct Slack post in `#bugs` or `#feature-request`. The PR is the report
   - MIME validation for skill / coworker documents: `apps/web/src/server/storage/validation.ts` (separate from chat attachments).
   - Sandbox file limit: `packages/core/src/server/services/sandbox-file-service.ts`.
 - PR conventions on this repo (look at recent merged PRs to confirm):
-  - Title format: `<Area>: <verb> <object>` (e.g. `Web: fix coworker builder chat scrolling`, `Sandbox: fix coworker APP_URL sync`, `Skills: enable imports by default`).
-  - Branch format: `fix/<slug>` for bugs, `feat/<slug>` for features. Slug is short, kebab-case.
+  - Title format: `<Area>: <verb> <object>` (e.g. `Web: fix coworker builder chat scrolling`, `Sandbox: fix coworker APP_URL sync`, `Skills: enable imports by default`). With this skill the title is prefixed with the Linear identifier: `BAP-123 Web: fix coworker builder chat scrolling`.
+  - Branch format: `fix/<slug>` for bugs, `feat/<slug>` for features, with the Linear identifier in the slug: `fix/bap-123-chat-scrolling`. Linear's GitHub integration auto-detects either form.
   - Default branch is `main`.
 
 ## Step 1 — get a fresh local clone
@@ -63,9 +66,9 @@ Use the Claude-in-Chrome MCP tools (`mcp__Claude_in_Chrome__*`):
 - `preview_screenshot` (or `computer` action) to capture the broken state. Take 1 to 3 screenshots: one wide shot, one zoomed, one of the working baseline for comparison if relevant.
 - `read_console_messages` and `read_network_requests` to catch silent errors, 4xx/5xx, unexpected payloads.
 - Use `find` / `javascript_tool` to probe DOM state, computed styles, dataset attributes.
-- Save screenshot file paths. Include them in the PR body (markdown image refs to local paths are fine, GitHub will not render them but they document the investigation) and surface them to the user at the end so they can drop them into the PR conversation manually.
+- Save screenshot file paths. Reference them in the Linear ticket description (Linear renders local paths as plain text, but the team can upload them on the ticket via the Linear UI if needed).
 
-Skip Chrome reproduction only for purely backend / non-visual bugs. Justify the skip in one line.
+Skip Chrome reproduction only for purely backend / non-visual bugs. Justify the skip in one line in the ticket description.
 
 The visual evidence refines the diagnosis. It does not replace the code-level root cause.
 
@@ -94,72 +97,85 @@ Cover systematically:
 Produce:
 
 - **Quick fix** (the 10-minute unblock). This is what the PR will implement. Often: raise a constant, replace a silent `.filter()` with a toast, add a missing listener, copy a hook from the working surface to the broken one.
-- **Durable fix** (the structural property). Goes in the PR body as a follow-up note, not as code. Describe the **property** the fix should have, not a specific transport / vendor.
+- **Durable fix** (the structural property). Goes in the PR body and the Linear ticket as a follow-up note, not as code. Describe the **property** the fix should have, not a specific transport / vendor.
 - **Alternatives considered**: 2-3 bullets, one line each, trade-offs.
 - **Implications**: which other surfaces / hooks / constants get touched, migration concerns, data impact.
 
-## Step 5 — implement the fix on a branch
+## Step 5 — dedup check (mandatory, before any side effect)
 
-On the local clone:
+Two checks, both required. The router may have done a first pass, but redo them here with the post-investigation knowledge.
+
+**a) Linear `Bap` team** for an open ticket on the same root cause (60-day window):
+
+```
+mcp__linear__list_issues({
+  team: "BAP",
+  query: "<distinctive token, e.g. file path or symbol>",
+  createdAt: "-P60D",
+  limit: 50,
+  includeArchived: false
+})
+```
+
+Run 2 or 3 queries with different tokens. Ignore tickets in status `Canceled` or `Duplicate`. If a clear duplicate exists, **stop here**: do not open a PR, do not create a new ticket. Return to the caller with `Already covered by: BAP-<n> <ticket URL>` and the draft you would have shipped, so the user can comment on the existing ticket.
+
+**b) Open PRs on the bap repo** touching the same files or symptom:
 
 ```bash
-cd /tmp/bap-investigation   # or wherever the clone lives
-git checkout main && git pull
-git checkout -b fix/<short-slug>     # or feat/<short-slug> for features
+gh pr list --state open --search "<keyword>" --json number,title,headRefName,url
 ```
 
-Slug rules: kebab-case, ≤4 words, derived from the bug noun (e.g. `chat-column-collapse`, `audio-attachment-size`, `coworker-postmessage-listener`).
+Run with 2-3 keyword variants (file path, symbol name, symptom noun). If a clear duplicate PR exists, check whether it already has a `BAP-` identifier in its title; if yes, **stop** and return that identifier + PR URL. If no, the next step will create the Linear ticket and you should comment on the existing PR with the new ticket identifier instead of opening a second PR.
 
-**Implement the QUICK FIX, nothing more.** Constraints:
+Borderline (one shared keyword, different root cause) → continue; mention the related ticket / PR in the new ticket description.
 
-- Smallest possible diff. One or two files.
-- No refactor, no unrelated cleanup, no defensive coding for cases that cannot happen, no comments explaining the fix (the PR body explains).
-- No new abstractions for hypothetical future use.
-- If the durable fix is large (new hook, new endpoint, new component), it does NOT go in this PR. Mention it in the PR body for follow-up.
-- For **feature requests**: if the implementation is larger than ~50 lines, open a **draft** PR with the smallest scaffold and a detailed TODO list in the body. Do not autonomously ship a 500-line feature without review.
+Never silently skip. Never create a duplicate.
 
-Commit with a Bap-style message:
+## Step 6 — create the Linear ticket
+
+The ticket is created **before** the branch and PR so its identifier can be embedded in branch name + PR title and Linear's GitHub integration auto-attaches the PR.
 
 ```
-<Area>: <verb> <object>
-
-<one paragraph: what changed and why, with file:line refs>
+mcp__linear__save_issue({
+  team: "BAP",
+  title: "<Area>: <verb> <object>",                       // PR-style, < 70 chars, no em-dash
+  description: "<see ticket body template below>",
+  state: "<config.linear.statuses.triage>",               // start at Triage; Step 9 transitions to In Review
+  labels: [
+    "<config.linear.labels.bug | .feature>",
+    "<config.linear.labels.dogfooding>",                  // every FDE-surfaced finding
+    "<config.linear.labels.ui_ux>"                        // only if the finding lives in the UI
+  ],
+  assignee: "<config.linear.default_assignee_user_id>",   // Baptiste
+  priority: 3                                             // 0=None 1=Urgent 2=High 3=Medium 4=Low; default 3
+})
 ```
 
-Areas seen on the repo: `Web`, `Sandbox`, `Skills`, `Core`, `Agents`, `Chat`. Pick the most fitting.
+**Ticket body template** (markdown, French ok since the team is French):
 
-## Step 6 — open the PR
+```markdown
+## Symptôme
+<une ligne : ce que voit l'utilisateur>
 
-```bash
-git push -u origin <branch>
-gh pr create \
-  --title "<Area>: <verb> <object>" \
-  --base main \
-  --body "$(cat <<'EOF'
-## Bug
-<one-line restatement>
+## Cause racine
+<2-4 lignes, ancrées sur file:line>
 
-## Symptom
-<what the user sees, 1 line>
+## Fix proposé (quick)
+<le diff de la PR, file:line touché>
 
-## Root cause
-<root cause grounded in file:line refs, 2-4 lines>
+## Fix durable (suivi, pas dans cette PR)
+<la propriété structurelle que le fix devrait avoir>
 
-## What this PR does
-<the quick fix, with the touched file:line>
-
-## Durable fix (follow-up, not in this PR)
-<property the structural fix should have, 1-2 lines>
-
-## Alternatives considered
-- <option 1>: <trade-off>
-- <option 2>: <trade-off>
-
-## Regression commit (if found)
-`<hash> <subject>`
+## Alternatives considérées
+- <option 1> : <trade-off>
+- <option 2> : <trade-off>
 
 ## Repro
-<one line: where to click in https://heybap.com to see the bug; screenshot paths if any>
+<une ligne : où cliquer dans https://heybap.com>
+Screenshots : <chemins locaux, à uploader manuellement si besoin>
+
+## Régression connue
+<commit hash + subject si trouvé, sinon "non identifié">
 
 <!-- FINDING_CONTEXT
 {
@@ -182,87 +198,109 @@ gh pr create \
   ]
 }
 END_FINDING_CONTEXT -->
+```
+
+The `FINDING_CONTEXT` block is **mandatory** and stays embedded in the ticket description (Linear preserves HTML comments). [bap-post-deploy-verify](../bap-post-deploy-verify/SKILL.md) reads it from the ticket description after the PR is merged + deployed. Without the block, the verifier returns `verdict: "no-finding-context"` and the loop stays open.
+
+If the finding was passed to you with a pre-computed `hash`, use it verbatim. Otherwise compute it as `sha256(kind + "|" + title + "|" + first_code_ref_or_run_id)` so two findings on the same root cause produce the same hash.
+
+Capture the ticket identifier (`BAP-<n>`) and URL (`https://linear.app/heybap/issue/BAP-<n>`) returned by `save_issue`. You will use both in the next steps.
+
+Title rules:
+- Match the convention from recent merged PRs in `the-agentic-company/bap`: `<Area>: <verb> <object>`. Check `gh pr list --state merged --limit 10` if unsure.
+- Under 70 chars.
+- No em-dashes anywhere.
+- Do not prefix the Linear ticket title itself with `BAP-<n>`; Linear adds the identifier on display.
+
+## Step 7 — implement the fix on a branch
+
+On the local clone:
+
+```bash
+cd /tmp/bap-investigation   # or wherever the clone lives
+git checkout main && git pull
+git checkout -b fix/bap-<n>-<short-slug>     # or feat/bap-<n>-<short-slug> for features
+```
+
+Slug rules: kebab-case, ≤4 words, derived from the bug noun (e.g. `chat-column-collapse`, `audio-attachment-size`, `coworker-postmessage-listener`). The `bap-<n>` prefix lets Linear's GitHub integration auto-attach the branch + PR.
+
+**Implement the QUICK FIX, nothing more.** Constraints:
+
+- Smallest possible diff. One or two files.
+- No refactor, no unrelated cleanup, no defensive coding for cases that cannot happen, no comments explaining the fix (the ticket description and PR body explain).
+- No new abstractions for hypothetical future use.
+- If the durable fix is large (new hook, new endpoint, new component), it does NOT go in this PR. Mention it in the ticket's "Fix durable" section for follow-up.
+- For **feature requests**: if the implementation is larger than ~50 lines, open a **draft** PR with the smallest scaffold and a detailed TODO list in the body. Do not autonomously ship a 500-line feature without review.
+
+Commit with a Bap-style message that references the ticket:
+
+```
+<Area>: <verb> <object> (BAP-<n>)
+
+<one paragraph: what changed and why, with file:line refs>
+```
+
+Areas seen on the repo: `Web`, `Sandbox`, `Skills`, `Core`, `Agents`, `Chat`. Pick the most fitting.
+
+## Step 8 — open the PR
+
+```bash
+git push -u origin <branch>
+gh pr create \
+  --title "BAP-<n> <Area>: <verb> <object>" \
+  --base main \
+  --body "$(cat <<'EOF'
+Closes BAP-<n>
+
+## What this PR does
+<the quick fix, with the touched file:line>
+
+## Linear ticket
+The full context (symptom, root cause, alternatives, FINDING_CONTEXT for post-deploy verify) lives in BAP-<n>: https://linear.app/heybap/issue/BAP-<n>
+
+## Repro
+<one line: where to click in https://heybap.com>
 EOF
 )"
 ```
 
-For features, add `--draft`. For bugs, non-draft.
-
-Capture the PR URL returned by `gh pr create`. You will need it for Step 8.
-
-**The `<!-- FINDING_CONTEXT ... -->` block is mandatory.** [bap-post-deploy-verify](../bap-post-deploy-verify/SKILL.md) reads it after merge to know what to re-test. Without the block, the verifier returns `verdict: "no-finding-context"` and the loop stays open. The block is hidden in the rendered PR view (HTML comment) so it does not pollute the review experience for humans.
-
-If the finding was passed to you with a pre-computed `hash`, use it verbatim. Otherwise compute it as `sha256(kind + "|" + title + "|" + first_code_ref_or_run_id)` so two findings on the same root cause produce the same hash.
+For features whose implementation is over ~50 lines, add `--draft`. For bugs and small features, non-draft.
 
 PR title rules:
-- Match the convention from recent merged PRs in `the-agentic-company/bap`: `<Area>: <verb> <object>`. Check `gh pr list --state merged --limit 10` if unsure.
-- Under 70 chars.
+- Must start with `BAP-<n>` so Linear auto-attaches.
+- Then the standard `<Area>: <verb> <object>` from recent merged PRs.
+- Under 70 chars total (so the area + verb + object stays concise).
 - No em-dashes anywhere.
 
-## Step 7 — dedup check (mandatory, before notifying Slack)
+Capture the PR URL returned by `gh pr create`. You will need it for Step 9.
 
-Two checks, both required:
-
-**a) Open PRs on the bap repo** touching the same files or symptom:
-
-```bash
-gh pr list --state open --search "<keyword>" --json number,title,headRefName,url
-```
-
-Run with 2-3 keyword variants (file path, symbol name, symptom noun). If a clear duplicate exists, **close your PR** (`gh pr close <number>`) and skip Step 8. Return to the user with the existing PR link + a one-line note.
-
-**b) Slack `#technical-pr`** (channel id `C0BBTDDQ6AJ`) for recent posts referencing the same files or symptom (60-day window):
+## Step 9 — update the Linear ticket: status In Review + attach PR
 
 ```
-slack_search_public(query="in:#technical-pr <distinctive token>")
+mcp__linear__save_issue({
+  id: "BAP-<n>",
+  state: "<config.linear.statuses.in_review>",
+  links: [
+    { url: "<PR URL>", title: "PR #<num> — <PR title>" }
+  ]
+})
 ```
 
-Run 2-3 short queries. If a clear duplicate exists, **close your PR** and skip Step 8. Return the existing thread permalink.
+Linear's GitHub integration usually attaches the PR automatically once the branch lands (because the branch name contains `bap-<n>`). The explicit `links` attachment is a belt-and-braces fallback if the integration is delayed.
 
-Borderline (one shared keyword, different root cause) → keep the PR, post in Slack but mention the related thread in the return-to-user note.
+`links` is append-only, so re-running this step in a retry is safe.
 
-Never silently skip. Never post when a clear duplicate exists.
-
-## Step 8 — notify in Slack `#technical-pr` (autonomous)
-
-Post a **short** message in `#technical-pr` (`C0BBTDDQ6AJ`), pinging Baptiste at the start.
-
-Baptiste's Slack user id: `U0A87JNV8QP`. Prepend `<@U0A87JNV8QP> ` (with trailing space).
-
-Message structure (target: 60-100 words, no more):
-
-```
-<@U0A87JNV8QP> <PR URL>
-
-*<one-line summary, same as PR title>*
-
-<2-3 lines: what breaks for the user + the one-line root cause with the key file:line>
-
-<one line: what this PR changes>
-```
-
-Style:
-
-- English, sober, factual.
-- **NO em-dashes (— / –).**
-- No fluff, no "I just opened a PR", no business framing.
-- The PR body holds the depth. The Slack message is a notification, not a duplicate of the PR.
-
-Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (not the draft variant). `channel_id = "C0BBTDDQ6AJ"`.
-
-If the message accidentally crosses ~120 words, cut it. Slack #technical-pr is a stream, not a doc.
-
-## Step 9 — return to the user
+## Step 10 — return to the user
 
 Output exactly three blocks, no commentary, no headers:
 
-1. The PR URL.
-2. The Slack permalink returned by `slack_send_message`, prefixed with `Posted: `.
-3. If Chrome screenshots were captured in Step 2, one final line: `Screenshots: <paths>` so the user can attach them to the PR conversation manually.
+1. The Linear ticket: `BAP-<n>  <ticket URL>`.
+2. The PR URL.
+3. If Chrome screenshots were captured in Step 2, one final line: `Screenshots: <paths>` so the user can attach them to the Linear ticket manually.
 
-If the dedup step closed your PR, output instead:
-- `Already covered by: <existing PR URL or Slack permalink>`
-- The draft PR body you would have shipped, so the user can comment on the existing thread.
+If the dedup step (Step 5) stopped you, output instead:
+- `Already covered by: BAP-<n> <ticket URL>` (or the existing PR URL if no ticket exists yet)
+- The draft ticket description you would have shipped, so the user can update the existing ticket / PR.
 
 ## Historical bugs (anchors)
 
@@ -275,10 +313,41 @@ Use as sanity checks if the current bug sounds similar:
 ## What NOT to do
 
 - Do not push to `main`. Always a branch + PR.
-- Do not implement the durable fix if it is larger than a small diff. It belongs in the follow-up section of the PR body.
-- Do not add comments in the code explaining the bug. The PR body is the explanation.
+- Do not implement the durable fix if it is larger than a small diff. It belongs in the follow-up section of the Linear ticket and PR body.
+- Do not add comments in the code explaining the bug. The Linear ticket and PR body are the explanation.
 - Do not assume Vercel / S3 / specific vendors unless the repo already uses them.
 - Do not claim something is broken without a `file:line` proof.
-- Do not use em-dashes anywhere (commit message, PR title, PR body, Slack post).
-- Do not post in `#bugs` or `#feature-request` from this skill. Those channels are for free-form reports, not for PR notifications. This skill posts only in `#technical-pr`.
-- Do not open a second Slack message. One notification per PR.
+- Do not use em-dashes anywhere (commit message, PR title, PR body, Linear ticket).
+- Do not post to Slack from this skill. Linear's integrations broadcast create / update events; that is the team's chosen notification surface.
+- Do not open the PR before the Linear ticket. The ticket identifier needs to be in the branch + title.
+- Do not skip the FINDING_CONTEXT JSON block. The post-deploy verifier depends on it to close the loop.
+
+## Config
+
+`lubin-skills/bap-bug-report/config.yaml` mirrors the router's `linear` block:
+
+```yaml
+linear:
+  team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
+  team_key: "BAP"
+  default_project_id: null
+  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste
+  labels:
+    bug: "e356eade-cc41-4abb-9447-00487b30583c"
+    feature: "296529af-3672-4bd7-876d-64245d40c768"
+    dogfooding: "50b28f0f-60be-460d-9db1-bd2e03e79f42"
+    ui_ux: "848839d8-15da-440a-96e1-02e725dc153d"
+  statuses:
+    triage: "b63fe240-0351-4011-a754-3b69c3cc5c99"
+    in_review: "423d89b9-126c-4db1-aa27-05b25baafd20"
+github_repo: "the-agentic-company/bap"
+dedup_window_days: 60
+```
+
+Keep this in sync with `lubin-skills/bap-finding-router/config.yaml`. The router is the canonical source.
+
+## See also
+
+- [bap-finding-router](../bap-finding-router/SKILL.md): the gate that dispatches SIMPLE findings to this skill.
+- [bap-feature-brainstorm](../../.claude/skills/bap-feature-brainstorm/SKILL.md): the COMPLEX counterpart that creates a Linear ticket at status `Triage` with `Need More Shaping` instead of a PR.
+- [bap-post-deploy-verify](../bap-post-deploy-verify/SKILL.md): closes the loop by transitioning this ticket to `Live` after the merge + deploy is verified in prod.

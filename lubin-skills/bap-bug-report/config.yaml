@@ -1,0 +1,17 @@
+linear:
+  team_id: "5ff3b86a-a1a5-4241-ac5c-e65a143f16e3"
+  team_key: "BAP"
+  default_project_id: null
+  default_assignee_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste (CTO)
+  labels:
+    bug: "e356eade-cc41-4abb-9447-00487b30583c"
+    feature: "296529af-3672-4bd7-876d-64245d40c768"
+    improvement: "c3a89ed7-2e23-4a60-b46d-ee7cab2f7c48"
+    dogfooding: "50b28f0f-60be-460d-9db1-bd2e03e79f42"
+    ui_ux: "848839d8-15da-440a-96e1-02e725dc153d"
+  statuses:
+    triage: "b63fe240-0351-4011-a754-3b69c3cc5c99"
+    in_review: "423d89b9-126c-4db1-aa27-05b25baafd20"
+    live: "1a4d7932-5cb0-409a-8bcc-33d4bcf23bb8"
+github_repo: "the-agentic-company/bap"
+dedup_window_days: 60
