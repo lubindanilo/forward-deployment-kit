@@ -426,6 +426,120 @@ run phase 1 + phase 2 back-to-back without pausing.
 
 Without these two, multi-step coworkers feel "stuck" even though the run completes successfully — the LLM just decided it was done.
 
+## 20. `skill_add` uploads disabled — UI enable is mandatory before runs
+
+`mcp__bap__skill_add` returns `enabled: false` on every fresh upload. Disabled skills are *not* written into the sandbox under `/app/.claude/skills/<slug>/` at pre-prompt time — only enabled skills are. So a coworker whose `allowedSkillSlugs` references a disabled skill behaves like this:
+
+```
+find /app/.opencode/skills -name SKILL.md | xargs grep -l 'my-slug'   →   (no output)
+read /app/.claude/skills/my-slug/SKILL.md                              →   File not found
+glob '**/my-slug/**'                                                   →   No files found
+[agent gives up, run ends "completed" in 60 s with 0 tools fired]
+```
+
+No error in the run log. No warning at upload time. Pre-prompt timings even show `pre_prompt_skills_write_completed` — but that step writes only the built-in integration skills + enabled user skills. Yours is neither.
+
+There is currently **no MCP tool to flip the enabled bit**. `skill_add` only inserts the row. Enable must be done in the workspace UI:
+
+> HeyBap → Skills tab → find the slug → toggle on.
+
+The fact that this isn't programmatic is itself a footgun for any automation that walks the full `skill_add` → `coworker_update` → `coworker_run` pipeline. The orchestrator (`transcript-to-bap-coworker`) treats this as a **HUMAN STOP** between upload and test, the same way an unbound workspace MCP triggers a stop. Wrap your pipeline accordingly:
+
+1. `skill_add` returns ids, `enabled: false`.
+2. Surface a human-action message listing the slugs to enable.
+3. Block until the human acks.
+4. Then run the test loop (rule #19 `[MODE TEST]` payloads will exercise the deployed SKILL.md).
+
+The smoke check that catches this in seconds: pull `coworker_logs(runId)` right after the first test run and look for the first `read` or `bash find` for `SKILL.md`. If the result is `(no output)` or `File not found`, the skill never made it to the sandbox — the rest of the log is irrelevant. Re-enable, re-run.
+
+When (if) `skill_enable` lands as an MCP tool, drop the human stop and call it inline.
+
+## 21. `[MODE TEST]` and other dry-run modes need concrete artifacts, not "log it in chat"
+
+When the dry-run path of a skill bypasses every external tool call (no Salesforce write, no Gmail send, no MCP push), the agent is left with no required work — and gpt-5.5 (and peers) treat that as "I've understood, done", emit a short acknowledgement, and stop. The model never produces the structured payload the skill asked for, even when the prompt explicitly says "log the data in chat".
+
+Observed on `sales-call-wrap-up` v1 (2026-06-18): MODE TEST contract said *"n'écris pas dans Salesforce. Loggue le payload `data` complet en chat + simule la réponse"*. Agent read SKILL.md, thought for 18 s, emitted 512 output tokens, and stopped. No `data` JSON. No note. No custom fields. Run "completed", silently broken. v2 fixed the same agent by requiring 3 file artifacts; same transcript, same model, same MODE TEST sentinel — went from 512 → 1441 output tokens with 3 `sandboxFiles` produced.
+
+**Fix:** require a *concrete artifact* the LLM cannot hand-wave. Force a file write (or a `/app/output.html` panel, or a deterministic-script call). Materialising output in the sandbox both forces real generation and produces `sandboxFiles[]` entries the human can verify post-hoc via `coworker_logs`.
+
+Wrong:
+```
+[MODE TEST] : n'écris pas dans Salesforce. Loggue le payload `data` complet en chat + simule la réponse.
+```
+
+Right:
+```
+[MODE TEST] = simulation complète, non-négociable. Tu DOIS produire :
+1. `data` JSON → écris dans /tmp/wrap-up-data.json puis cat
+2. Note Salesforce simulée → écris dans /tmp/wrap-up-note.md puis cat
+3. Mapping custom fields → écris dans /tmp/wrap-up-customfields.txt puis cat
+4. Chat final structuré (5 lignes, format X)
+Tu ne réponds JAMAIS juste "OK MODE TEST".
+```
+
+The same principle applies to any "preview", "rehearsal", or "diff-only" mode: concrete artifact > "log to chat". If the agent has nothing to *do*, it will decide there's nothing to *say* either.
+
+This compounds with rule #15: panels (`/app/output.html`) are the cleanest artifact for MODE TEST because the agentic-app surface validates the output visually in one click. For non-panel coworkers, write a `/app/<slug>-data.json` (or similar) and reference its path in the chat reply — rule #17 turns the path into a downloadable chip and the human can spot-check.
+
+## 22. Generating the panel is not validating the panel — interactive features need a real-receiver test
+
+A panel produced under `[MODE TEST]` (rule #21) tells you the agent can extract the data, render the HTML, and write `/app/output.html` correctly. It tells you nothing about whether **clicking the button does anything**. The `parent.postMessage` send path, the parent acknowledgement, the chat injection of the structured prompt, the agent's reaction to that prompt, the actual Gmail/Salesforce/Slack write — all of that is downstream of the click and untested by MODE TEST.
+
+Observed on `sales-followup-drip` (2026-06-18): MODE TEST run produced a clean `output.html` (8127 bytes, sandboxFile listed). Coworker shipped. First real user click on Send → nothing happened in the chat. The agent never reacted because the postMessage either never reached the parent, never injected, or never matched the agent's expected prefix. None of that is visible from the MODE TEST log; the panel was rendered, that was all.
+
+**The rule.** Every coworker that ships an interactive feature (panel buttons, multi-turn user-input gates, real external writes) needs a **two-phase test**:
+
+| Phase | Validates |
+|-------|-----------|
+| 1. MODE TEST with fake receiver | extraction, render, panel exists in sandboxFiles, structured artefacts produced |
+| 2. Real run with tester's own receiver | click → chat injection works, real tool call fires, artefact lands in the target system |
+
+Phase 2 **never** uses the prospect's email/case/channel as receiver — always the tester's own (`lubin@hyperstack.studio`, a sandbox Salesforce org, a `#test-*` Slack channel). The transcript-to-bap-coworker orchestrator gates declaring `live` on phase 2 passing, and surfaces a HUMAN STOP if the button-click loop needs a real gesture (which it does, today, by design of the user-activation rule — see rule #15).
+
+**Minimum acceptable contract for the SKILL.md** of any panel coworker:
+
+```
+## Real-receiver E2E test (after MODE TEST passes)
+
+Pour valider que le panel pousse bien la prompt au chat et que ${target_tool} envoie/écrit
+pour de vrai, lance UN run sans `[MODE TEST]` avec le tester comme receiver :
+
+- contactEmail / caseId / channel = ton propre <thing>, jamais celui du prospect
+- Clique sur Send dans le panel
+- Vérifie :
+  (a) un message starting with "[<PREFIX FROM TEMPLATE>]" apparaît dans le chat
+  (b) l'agent réagit (lit le prompt, appelle ${target_tool})
+  (c) l'artefact arrive dans le système cible
+
+Si (a) ne se produit pas → bug template/Bap. Inspecte devtools console du panel.
+Si (a) ok mais (b) non → mismatch entre le préfixe du panel et celui que le prompt attend.
+Si (b) ok mais (c) non → mauvais nom de tool namespacé (rule #6) ou intégration cassée.
+```
+
+This contract is now baked into the canonical templates (`build-agents-for-bap/templates/`). When you write a panel coworker, copy the test contract from the template's matching SKILL.md, fill the target tool name and the prefix, and run both phases before declaring live.
+
+## 23. `type="button"` is mandatory on every `<button>` in an agentic-app panel
+
+Without an explicit `type` attribute, a `<button>` element defaults to `type="submit"`. Inside the Bap agentic-app iframe, this default has a quiet but lethal consequence: the click event fires, JavaScript runs to completion (button visually disables, `parent.postMessage` is called), but the parent React app silently discards the prompt. No chat injection. No error. The button just greys out for 5 s, the user clicks again, same result.
+
+Observed on `sales-followup-drip` v1 (2026-06-18): three buttons (Send / Edit / Cancel) shipped without `type="button"`. Click → button greyed → no message in chat. The reference test panel that Lubin ships (`output-2.html`) had `type="button"` explicit and worked nominally. v2 added `type="button"` and the postMessage went through.
+
+**The rule.** Every `<button>` in `/app/output.html` (or any panel HTML the agent writes) carries `type="button"` explicitly:
+
+```html
+<button type="button" class="btn btn-primary" id="send">Send</button>
+<button type="button" class="btn btn-ghost"   id="edit">Edit</button>
+<button type="button" class="btn btn-secondary" id="cancel">Cancel</button>
+```
+
+No exceptions. Even when there is no `<form>` ancestor (and there usually isn't), the default-submit behaviour is intercepted by something in Bap's UI surface and the postMessage gets dropped. The canonical template `templates/email-validate.html` was missing this and is now fixed.
+
+**Diagnostic, when a panel button greys but no chat message appears:**
+
+1. Inspect the panel HTML via devtools. Every `<button>` should have `type="button"`. If any defaults to submit, fix it.
+2. Open the panel iframe in `chrome://inspect`, click Send, watch the network panel for the postMessage event. If it fires but no chat injection happens upstream, escalate to Baptiste with the timestamps.
+3. Check the panel's console for hydration errors (React #418 with `args[]=HTML` is a known symptom — usually downstream of the type=submit gotcha).
+
 ## Build / debug workflow
 
 1. **Design** — write the SKILL.md focused on what the agent *decides*; offload everything mechanical to bundled scripts.
@@ -446,6 +560,11 @@ Without these two, multi-step coworkers feel "stuck" even though the run complet
 - Giving up on a Gmail/Outlook/Slack step because the system-init message says "unavailable" without trying the sandbox CLI — rule #16.
 - Stuffing a 17 KB HTML template into `coworker_uploadDocument` and wondering why the agent only sees the first 2 KB — rule #18.
 - Multi-step coworker that "stops after the first image" — missing validation signals, rule #19.
+- Calling `coworker_run` right after `skill_add` and trusting `status: "completed"` — rule #20. The agent silently can't find the disabled SKILL.md, the run "completes" in 60 s having done nothing.
+- Reporting a coworker as "live" without reading `coworker_logs` for the test run. Status `completed` ≠ agent did the right thing — read the events, see what fired.
+- MODE TEST contract phrased as "log the data in chat and simulate" — rule #21. The agent will read the skill, decide there's nothing to do, and emit a 300-token ack. Make the simulation produce real files in the sandbox.
+- Marking a panel-using coworker `live` after a MODE TEST run because `/app/output.html` appeared in `sandboxFiles`. Rule #22. MODE TEST renders the panel; it does not validate that clicking Send reaches the chat or that Gmail actually sends. Run a phase-2 test with your own email as receiver before declaring done.
+- Writing `<button>Send</button>` instead of `<button type="button">Send</button>` in a panel — rule #23. The default is submit, the postMessage gets dropped silently, the button greys and nothing happens. Always set type=button explicitly on every panel button.
 
 ## See also
 

@@ -1,0 +1,53 @@
+---
+name: my-mini-app
+description: |
+  REPLACE: one-paragraph description of what the coworker does and when to trigger.
+  Mention any trigger phrase the user is likely to type, any URL pattern, any keyword.
+  Bap routes on description, so be specific.
+---
+
+# my-mini-app
+
+## Absolute rules
+
+1. **One-shot trigger**: if the input matches `<your-trigger>`, launch immediately. No confirmation prompts, no preamble.
+2. **`/app/output.html` is generated ONLY by `render_panel.py`** — never write HTML inline, never construct a panel yourself.
+3. **No descriptive chat messages**. The HTML is the UI. One short line in chat when done. That's it.
+
+## Procedure
+
+### Step 1 — collect inputs
+
+```bash
+# Example: read a context file from the sandbox
+CONTEXT_FILE=$(find /app -maxdepth 2 -name "context.md" 2>/dev/null | head -1)
+CONTEXT=""
+if [ -n "$CONTEXT_FILE" ]; then
+  CONTEXT=$(cat "$CONTEXT_FILE")
+fi
+```
+
+### Step 2 — start the session via MCP
+
+Call the MCP tool `<your-mcp-name>_start_session` with the relevant inputs. Capture `session_id` and `live_url` from the JSON response.
+
+### Step 3 — render the panel
+
+```bash
+SCRIPT=$(find /app -name render_panel.py | head -1)
+python3 "$SCRIPT" "<live_url>"
+```
+
+### Step 4 — one chat line
+
+> Lancé. Plein écran : <live_url>
+
+Then stop. Do not narrate, do not summarize, do not describe what the panel shows.
+
+## Anti-patterns
+
+- Writing HTML in the agent response
+- Describing the panel in chat ("The transcript will appear on the left...")
+- Adding a second panel or extra buttons
+- Asking the user to confirm before launching when the trigger is unambiguous
+- Mentioning `/app/output.html`, SSE, the backend, or anything implementation-level

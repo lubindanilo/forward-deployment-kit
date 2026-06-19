@@ -377,9 +377,28 @@ assistant.messages.last contains "Je ne peux pas..."
 - Counting a `needs_user_input` test as success because the run did not error. Success requires a terminal `completed` plus passing eval.
 - Hardcoding the iteration cap to a large number to "give the loop more chances". After 5 iterations without progress, the answer is human review, not more tokens.
 
+## Report HeyBap bugs and feature gaps
+
+The test loop is the most concentrated source of HeyBap-side signal in the pipeline. Every iteration that *patches around* a platform misbehaviour is a finding you should report. Invoke [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies the finding (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap`, notifies `#technical-pr`) or `bap-feature-brainstorm` (posts a 3-options problem statement in `#brainstorming-produit`). One finding equals one invocation. Do not invoke the leaf skills directly.
+
+Specific triggers from this skill:
+
+- The diagnose step returns `requiresHuman: true` because the patch space (`prompt`, `skillSlugs`, `workspaceMcpServerIds`, `autoApprove`, `authSource`, `integrations`, `requiresUserInput`, `userInputPrompt`) cannot fix the failure. The root cause sits in HeyBap. Bug or feature, depending.
+- A run errored with `The runtime stopped making progress.` and the underlying skill follows rule #1 (no large artefact generation, bundled script in place). Bug.
+- `coworker_logs.events` is missing a `tool_use` for a tool the agent demonstrably called (visible in the side-effect: Notion page created, but no `notion.create_page` event). Bug.
+- `run.status == "completed"` but `sandboxFiles` is empty even though the skill wrote `/app/output.html`. Bug.
+- `awaiting_auth` fires without a clear reason, on a coworker whose `authSource` and `model` are aligned with the rule-#8 matrix. Bug.
+- `act-then-cleanup` is the right strategy for an integration but the matching MCP exposes no delete or undo endpoint (Slack message delete needing admin scope, a custom MCP without an `_delete` tool). Feature request, name the integration.
+- Test runs are indistinguishable from prod runs in the HeyBap UI because `coworker_runs` cannot be filtered by tag or by the `[MODE TEST]` marker. Feature request: first-class test mode (tagged runs, auto-cleanup hook, sandbox env routing native to the platform).
+- `coworker_update` accepted a patch but the new prompt did not propagate to the next run (cache invalidation gap). Bug.
+- The diagnose patterns table grows with a new failure mode that has no recommended patch. Feature request: HeyBap-side observability for this pattern.
+
+Do not retry quietly. Surface every structural finding.
+
 ## See also
 
 - [parse-transcript-to-agent-spec](../parse-transcript-to-agent-spec/SKILL.md): produces the `agentSpec` this skill consumes.
 - [transcript-to-bap-coworker](../transcript-to-bap-coworker/SKILL.md): the orchestrator that calls this skill at the end.
 - [build-agents-for-bap](../build-agents-for-bap/SKILL.md): rules referenced throughout (#1, #5, #6, #7, #8, #9, #11, #15, #16, #19).
 - [build-mcp-for-bap](../build-mcp-for-bap/SKILL.md): when the diagnose step says "the MCP itself is the bug", fix lives there.
+- [bap-finding-router](../bap-finding-router/SKILL.md): invoke whenever a diagnose step concludes the root cause is in HeyBap (see the section above).

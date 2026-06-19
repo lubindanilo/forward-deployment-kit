@@ -1,0 +1,8 @@
+slack:
+  technical_pr_channel_id: "C0BBTDDQ6AJ"          # #technical-pr, used by bap-bug-report dispatch
+  brainstorm_channel_id: "REPLACE_WITH_CREATED_CHANNEL_ID"  # #brainstorming-produit, set after channel creation
+  baptiste_user_id: "U0A87JNV8QP"
+slack_workspace: "The Agentic Company"
+github_repo: "the-agentic-company/bap"
+investigation_time_cap_minutes: 5
+confidence_floor: 0.6

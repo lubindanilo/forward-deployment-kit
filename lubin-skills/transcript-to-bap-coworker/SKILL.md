@@ -283,33 +283,94 @@ mcp__bap__skill_add({
 
 Verify the skill loaded by listing it indirectly: create a minimal smoke `chat_run` that asks the system to list available skills, and check the slug is present. If absent, the upload silently failed; abort the agent build and surface.
 
-## Step 5. Create the coworker
+## Step 5. Create the coworker — two-call pattern
+
+**The MCP `coworker_create` tool has a narrow signature.** It accepts only: `name`, `prompt`, `model`, `authSource`, `trigger`, `integrations`, `autoApprove`, `folder`, `files`. It does **NOT** accept `username`, `skillSlugs`, `requiresUserInput`, `userInputPrompt`, `workspaceMcpServerIds`, `schedule`, `toolAccessMode`, `customIntegrations`, or `description`.
+
+So a fully wired coworker always takes **two calls**: a minimal `coworker_create` followed by a `coworker_update` that adds everything else. Skip the update and the coworker is shipped with no skill wired, no start message, no MCP IDs, no schedule — silent half-broken state.
+
+### 5a. Minimal create
 
 ```
-mcp__bap__coworker_create({
+const created = await mcp__bap__coworker_create({
   name: agent.agentName,
-  username: agent.slug,                                  // hyphenated, unique per workspace
   prompt: assemblePrompt(agent),                         // see below
   model: agent.model || "openai/gpt-5.5",                // rule #8 default
   authSource: agent.authSource || "shared",
   trigger: agent.triggers[0].type || "manual",
-  requiresUserInput: agent.requiresUserInput,
-  userInputPrompt: agent.triggers.find(t => t.type === "manual")?.userInputPrompt,
   autoApprove: false,                                    // safe default; test loop will flip if needed
-  integrations: toolPlan.nativeIntegrations.map(t => t.name),
-  workspaceMcpServerIds: [...toolPlan.existingWorkspaceMcps, ...toolPlan.customMcpsToBuild.map(m => m.workspaceMcpServerId)],
-  skillSlugs: [agent.slug],
-  schedule: agent.triggers.find(t => t.type === "scheduled")?.spec || null
+  integrations: toolPlan.nativeIntegrations.map(t => t.name)
 })
+const coworkerId = created.coworker.id                   // UUID, used as `reference` in update
 ```
 
 `assemblePrompt(agent)` builds the prompt around 5 blocks: role, mission, tool inventory with namespaced names (rule #6), step-by-step procedure with validation signals (rule #19), output contract referencing the skill, and a "what to do if blocked" section.
 
+### 5b. Update — wire everything the create cannot set
+
+```
+await mcp__bap__coworker_update({
+  reference: coworkerId,                                 // or the returned @username once 5b sets one
+  username: agent.slug,                                  // hyphenated, unique per workspace
+  description: agent.description,                        // human-readable one-liner
+  skillSlugs: [agent.slug],
+  workspaceMcpServerIds: [
+    ...toolPlan.existingWorkspaceMcps,
+    ...toolPlan.customMcpsToBuild.map(m => m.workspaceMcpServerId)
+  ],
+  requiresUserInput: agent.requiresUserInput,
+  userInputPrompt: agent.triggers.find(t => t.type === "manual")?.userInputPrompt,
+  toolAccessMode: "selected",                            // restrict to listed integrations; less LLM confusion
+  schedule: agent.triggers.find(t => t.type === "scheduled")?.spec || null
+})
+```
+
+Run 5a and 5b for **every** coworker — do not batch creates and only update the last one. Each coworker needs its own update, or the skill, start message, and MCP IDs are missing.
+
+### 5c. Sanity check the wiring
+
+Before moving on, call `coworker_get(@${agent.slug})` and confirm:
+
+- `allowedSkillSlugs` contains `agent.slug`
+- `requiresUserInput` is `true` and `userInputPrompt` is non-empty (if the agent expects input)
+- `allowedIntegrations` matches the toolPlan
+- `allowedWorkspaceMcpServerIds` is non-empty if the agent needs a workspace MCP
+
+A `get` that misses any of these means the update silently dropped a field — usually a typo in the field name. Fix and re-update before testing.
+
 Persist the coworker reference (the returned `@username`) to `${skillFolderRoot}/<callId>/coworkers.json`.
 
-## Step 6. Run the test loop
+## Step 6. Run the test loop — never skip this
 
-For each freshly created coworker:
+**Non-negotiable.** A coworker is not "live" until at least one `[MODE TEST]` run has produced the expected behaviour. The `[MODE TEST]` sentinel exists precisely to make this step workspace-safe: writes to Salesforce / Gmail / Notion are bypassed, the agent logs the payload it *would* have sent. There is no "I don't want to pollute the workspace" exception — that is the failure mode this contract removes.
+
+Skipping this step has cost two real demos in the field: in both, the coworker shipped, the human-readable status said "live", and the first real run failed silently (skill not enabled, MCP tool name mismatch, schedule never fired). The fix is upstream: validate via a `[MODE TEST]` run *before* declaring the build done.
+
+### 6a. Prerequisite — enable the freshly-uploaded skills
+
+`mcp__bap__skill_add` returns `enabled: false` for new user skills. Disabled skills are *not* deployed into the sandbox under `/app/.claude/skills/`, so the coworker's `find /app/.opencode/skills -name SKILL.md | xargs grep -l '<slug>'` returns nothing, the agent gives up cleanly, and the run completes with no real work done. No error, no warning — just an agent that ran fast and produced nothing.
+
+There is currently **no MCP tool to enable a skill programmatically**. This is a workspace UI step:
+
+> HeyBap UI → Skills → find the freshly-uploaded skill by slug → toggle it on.
+
+The orchestrator must surface this as a **HUMAN STOP** between Step 4 (`skill_add`) and Step 6 (test loop), the same way Step 2b stops for the MCP bind. Block until the human confirms; do not run the test loop against unenabled skills (it will pass with `(no output)` and you will think the agent works).
+
+```
+[human action required — skills uploaded but disabled]
+Two skills are queued and need to be enabled in the workspace:
+  - sales-call-wrap-up
+  - sales-followup-drip
+
+Open HeyBap → Skills → toggle each one on.
+Reply "skills enabled" when done and I'll run the test loop.
+```
+
+When this MCP gap is closed (a `skill_update({enabled: true})` or `skill_enable({slug})` lands), drop the human stop and call it programmatically.
+
+### 6b. Invoke the test loop
+
+For each freshly enabled coworker:
 
 ```
 result = invoke bap-coworker-test-loop
@@ -324,12 +385,57 @@ result = invoke bap-coworker-test-loop
   }
 ```
 
-Branch on the result:
+Per agent: every `testPayloads[]` entry must be exercised, and every one must contain `[MODE TEST]` (parse-skill rule #5). The first payload validates the happy path; subsequent ones validate the degenerate inputs.
 
-- `status: "success"` -> coworker is ready, mark `live` in the final report.
-- `status: "handoff"` -> coworker exists but needs human attention. Mark `needsReview`, append the diagnosis.
+### 6c. Read the logs, do not trust the status
 
-The test loop already does cleanup; nothing else to do here.
+`coworker_run` returning `status: "completed"` only means the sandbox finished. It does **not** mean the agent did the right thing. Always pull `coworker_logs(runId)` and verify:
+
+- The first `read` or `bash find` tool_use for the skill's SKILL.md actually returned content (not `(no output)` or `File not found`).
+- The expected tool calls fired (Salesforce write attempt, Gmail send attempt, `render.py` execution, etc.) — even bypassed in `[MODE TEST]`, the agent should still *attempt* the tool path so you can confirm it picked the right tool name.
+- The structured payload the agent logged matches the skill's data contract.
+- `sandboxFiles` contains the artefacts the skill claims to produce (e.g. `/app/output.html` for panel coworkers).
+
+If any of those fail, the run "completed" but the coworker is broken — do not mark `live`. Iterate via `coworker_update` (prompt / skillSlugs / userInputPrompt) and re-run.
+
+### 6d. Interactive features — `[MODE TEST]` is not enough, real-receiver run is mandatory
+
+A `[MODE TEST]` run validates that the agent can read the skill, extract the data, and produce the artefact (data.json, panel HTML, etc.). It does **not** validate the parts that only fire on real user interaction or real external writes:
+
+- Panel buttons that postMessage back to the chat (rule #15). MODE TEST renders the panel, but it does not exercise the click → chat → agent reaction loop.
+- Tool calls that the agent is told to *bypass* in MODE TEST (Salesforce write, Gmail send, Notion page create). MODE TEST verifies extraction; it does not verify that the tool name is correct, the integration is wired, the OAuth scope is right, the field mapping matches the target system.
+- Multi-turn flows where the second turn depends on a real reply from the first turn.
+
+For any coworker that has interactive features or real external writes, the test loop must include a **two-phase test**, both mandatory:
+
+| Phase | Sentinel | Receiver / target | Validates |
+|-------|----------|-------------------|-----------|
+| 1. MODE TEST | `[MODE TEST]` | fake email / fake caseId / fake channel | extraction, render, panel exists, structured artefacts present |
+| 2. Real-receiver | (no sentinel) | tester's own email / sandbox CRM org / `#test-bot` Slack channel | button click → chat injection, real tool fires, artefact reaches the target system |
+
+Phase 2 always uses the **tester's own** receiver, never the prospect's. For email coworkers: `contactEmail = lubin@hyperstack.studio` (or whoever's running the test). For CRM coworkers: a sandbox org or a dedicated test case. For Slack coworkers: a `#test-*` channel the tester owns. Sending the prospect a "test" email is never acceptable.
+
+The phase-2 run is gated on a human action when the panel requires a click (rule #15 buttons). The orchestrator surfaces this as a **HUMAN STOP** after phase 1:
+
+```
+[human action required — interactive E2E test]
+Phase 1 (MODE TEST) passed for @sales-followup-drip. Panel rendered, payload extracted.
+Phase 2 needs you to:
+  1. Open the conversation: <link>
+  2. Click "Send" in the panel
+  3. Verify (a) a chat message starting with [SEND EMAIL EXACTLY AS BELOW] appears, (b) the email lands in your inbox
+
+Reply "phase 2 ok" or paste the chat error you see, and I'll mark the coworker live or iterate.
+```
+
+When the agent supports an autonomous test path (auto-approve mode + a deterministic transcript that hits the same code paths), phase 2 can be automated by triggering a second `coworker_run` and watching the logs for the actual `salesforce_*` / `google_gmail_*` tool call to fire. The button-click loop, however, requires a human gesture — no way around it today.
+
+### 6e. Branch on the result
+
+- `status: "success"` and logs check out → mark `live` in the final report.
+- `status: "handoff"` or logs reveal a silent failure → mark `needsReview`, append the diagnosis (which check failed in 6c).
+
+The test loop already does sandbox cleanup; nothing else to do here.
 
 ## Step 7. Consolidated report
 
@@ -387,9 +493,30 @@ The pipeline can be re-invoked with `{ resumeCallId: "<callId>", action: "mcp-bo
 - Putting the call-specific prospect name in the skill slug. Slugs are workspace-global; use the workflow domain (`sales-call-debrief-writer`), not the prospect (`acme-debrief-writer`).
 - Reporting `live` for a coworker that has `needsReview` items. The report distinguishes them deliberately so the human knows what to inspect.
 
+## Report HeyBap bugs and feature gaps (mandatory, all steps)
+
+The orchestrator is the only place in the pipeline that touches HeyBap at every level: spec extraction, MCP scaffolding and binding, skill upload, coworker creation, run / log / update, panel rendering, report persistence. You see the whole stack misbehave or fail to expose a needed capability. Surface every finding through [bap-finding-router](../bap-finding-router/SKILL.md). The router classifies (SIMPLE vs COMPLEX) and dispatches to `bap-bug-report` (opens a PR on `the-agentic-company/bap`, notifies `#technical-pr`) or `bap-feature-brainstorm` (posts a 3-options problem statement in `#brainstorming-produit`).
+
+One finding equals one invocation. A one-line description is enough; the router and its downstream skills do the deep investigation themselves. Do not invoke the leaf skills directly; do not batch findings; do not wait until "the end of the pipeline"; do not silently route around. Baptiste asked explicitly for tight feedback in the 2026-06-18 daily sync, and the orchestrator is the most concentrated source of HeyBap signal that exists.
+
+Triggers per step:
+
+- **Step 1 (parse).** Whatever `parse-transcript-to-agent-spec` would otherwise surface as a platform gap (see its own section).
+- **Step 2 (resolve tools).** A `neededTools[]` item should have been a native integration but you had to downgrade to `custom_mcp_to_build`. Name the missing integration as a feature request. `workspaceMcpServerIds` cannot be resolved because there is no listing API: feature request (also explicit in step 2b).
+- **Step 2b (build custom MCP).** The HUMAN STOP on workspace MCP bind is the single biggest friction of the whole pipeline. File the feature request once per session: "programmatic workspace MCP server creation + bind (URL, auth, OAuth) without UI". Also file a feature request if `Connect OAuth` fails on a freshly deployed MCP that passes the curl smoke-test (workspace-side regression).
+- **Step 3 (generate skill folder).** The HTML postMessage protocol (`bap:agentic-app-prompt`) has no schema introspection. There is no way to declaratively list "what actions a panel can send". Feature request. Also flag any panel-rendering bug observed during dry-run inspection.
+- **Step 4 (`skill_add`).** Returns 200 but the skill is not immediately visible to coworkers (async indexing window not documented). Bug or doc gap. `skill_add` cannot replace an existing skill with the same slug without manual delete first: feature request.
+- **Step 5 (`coworker_create`).** Rejects unknown `workspaceMcpServerIds` silently or with an opaque error: bug. No way to attach the `agentSpec` JSON as first-class coworker metadata (every run regenerates the test overlay from the on-disk spec file): feature request. `coworker_create` does not accept a `schedule` matching the spec's `triggers[].spec` shape one-to-one: surface the gap.
+- **Step 6 (test loop).** Whatever `bap-coworker-test-loop` would otherwise surface (see its own section).
+- **Step 7 (report).** The final report cannot be persisted as a HeyBap entity; it lands in Slack and on disk only. Feature request: a `coworker.buildReport` first-class object queryable from the UI.
+- **Resume after human action.** No webhook from HeyBap to notify the orchestrator that the workspace MCP bind happened. Feature request.
+
+If at any step you find yourself writing a comment like "TODO: HeyBap should support X" in code or in the report, that comment is the bug report. File it.
+
 ## See also
 
 - [parse-transcript-to-agent-spec](../parse-transcript-to-agent-spec/SKILL.md): step 1 of this pipeline.
 - [bap-coworker-test-loop](../bap-coworker-test-loop/SKILL.md): step 6 of this pipeline.
 - [build-agents-for-bap](../build-agents-for-bap/SKILL.md): the rule set the generated coworker must follow. Cited inline throughout (rules #1, #2, #4, #6, #8, #10, #15, #16, #18, #19).
 - [build-mcp-for-bap](../build-mcp-for-bap/SKILL.md): called in step 2b when a custom MCP is needed.
+- [bap-finding-router](../bap-finding-router/SKILL.md): invoke at every step where the platform falls short (see the section above).
