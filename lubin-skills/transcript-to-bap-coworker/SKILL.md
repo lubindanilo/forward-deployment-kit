@@ -142,6 +142,32 @@ Persist the returned payload at `${skillFolderRoot}/<callId>/prior-art.json`. Th
 
 The orchestrator must inject the prior-art context into every subagent / sub-skill it spawns from Step 3 onward, so the generation honours the reuse contract instead of inventing parallel patterns. Every generated artefact gets a one-line top-of-file comment: `# Modelled on <primaryReuse.ref>` or `# No prior art; new pattern for the workspace`.
 
+## Step 1.6. External platform feasibility check (mandatory, parallel)
+
+For every `neededTools[]` item that survived the prior-art scout as `custom_mcp_to_build` AND names a specific external platform (Leboncoin, Se Loger, LinkedIn, Indeed, Welcome to the Jungle, Vinted, Booking, PAP, Bien Ici, Pipedrive, ...) and is not on Bap's canonical native list, invoke [bap-platform-feasibility-check](../bap-platform-feasibility-check/SKILL.md) to verify the integration is actually achievable before committing to scaffold an MCP.
+
+The skill runs a 5-angle web research per platform (official API + tier, ToS posture, community MCPs / SDKs, browser-automation feasibility, known incidents + alternative routes) and returns a verdict per platform.
+
+```
+feasibility = invoke bap-platform-feasibility-check
+  platforms: [
+    { name: "<platform>", interactionShape: "<post|read|both>", region: "<FR|EU|WW>",
+      authNeeded: "<user-credentials|api-key|none>", frequency: "<one-shot|daily|hourly|realtime>",
+      context: "<one line from spec>" },
+    ...
+  ]
+  options: { researchTimeCapMinutesPerPlatform: 6 }
+```
+
+Persist the payload at `${skillFolderRoot}/<callId>/platform-feasibility.json`. Apply per verdict:
+
+- `feasible-via-api`: keep `kind: custom_mcp_to_build`; carry `apiTier` + `authScheme` to Step 2b. The custom MCP is a thin wrapper around the documented API.
+- `feasible-via-mcp`: downgrade `kind` to `existing_workspace_mcp`, set `mcpUrl` to the community MCP. Step 2's HUMAN STOP becomes "bind this URL in workspace settings" instead of "deploy a new MCP".
+- `feasible-via-browser`: tag the tool `kind: sandbox_browser_automation`. The orchestrator routes the action to Playwright running in the Bap sandbox (or a custom MCP that proxies a headless browser pool) instead of `build-mcp-for-bap`. Include the Angle 4 stealth notes (anti-bot stack, login flow) in the generated SKILL.md.
+- `legally-risky` or `infeasible`: tag the tool `kind: blocked` with `feasibilityVerdict` + `recommendedAlternative` from the payload. **Emit a HUMAN STOP before any scaffolding starts** (Step 2b refuses to build, Step 3 refuses to generate the agent until the operator decides: override, swap platform, or scope the agent without this tool).
+
+If `feasibility.humanStopRequired == true`, the orchestrator surfaces the stop with the verdicts and recommended alternatives, then waits for the operator's decision before proceeding to Step 2b.
+
 ## Step 2. Resolve tools per agent
 
 For each `agent` in the surviving list, build a `toolPlan`:
@@ -486,6 +512,12 @@ Emit one Markdown report to the human via the handoff channel and to disk at `${
 - ...
 **Primary reuse**: ${priorArt.recommendation.primaryReuse.ref} - ${priorArt.recommendation.primaryReuse.reuseRecipe}
 ${noPriorArt ? "**First build of this shape; no prior anchor reused.**" : ""}
+
+## External platform feasibility (${feasibility.platforms.length})
+- **${p.name}** -> ${p.verdict} (${p.recommendation.primary | truncate})
+  ${p.verdict in (legally-risky, infeasible) ? "Alternative: " + p.recommendation.backup : ""}
+- ...
+**Overall**: ${feasibility.overallVerdict}${feasibility.humanStopRequired ? " (HUMAN STOP required)" : ""}
 
 ## Live coworkers (${live.length})
 - **@${agent.slug}** - ${agent.description}

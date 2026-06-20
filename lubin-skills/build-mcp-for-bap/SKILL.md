@@ -41,9 +41,10 @@ Why this is safe: the bearer is server-only, the JWT-signed code is bound to the
 
 ## Decision flow before writing code
 
-1. **What tool(s) do we expose?** Name them and define the inputs/outputs. One MCP can host many tools; group by domain (e.g. one MCP for "transcription", one for "calendar admin").
-2. **Latency profile** — Vercel Hobby caps function `maxDuration` at 300s. If the tool needs longer (heavy LLM, large file processing), either chunk + parallelize internally, queue + poll, or move to Vercel Pro.
-3. **Reuse** — Will other coworkers/projects use this MCP? If yes, give it a generic name (`hyperstack-transcribe`, not `batimgie-transcribe`) and put the project in the org's Vercel + Git.
+1. **Feasibility pre-flight (mandatory for external platforms)** — Before scaffolding any MCP that wraps a third-party platform (Leboncoin, Se Loger, LinkedIn, Indeed, Welcome to the Jungle, Vinted, Booking, PAP, Bien Ici, Pipedrive, ...), invoke [bap-platform-feasibility-check](../bap-platform-feasibility-check/SKILL.md) with the platform name + interaction shape. The skill runs a 5-angle web research (API + tier, ToS, community connectors, browser automation, incidents) and returns a verdict. **Refuse to scaffold** when the verdict is `legally-risky` or `infeasible`, unless the operator passes an explicit `overrideFeasibility: true` (logged in the generated MCP's README). When the verdict is `feasible-via-mcp` (a maintained community MCP already covers the need), bind the existing URL in Bap instead of building a new MCP; this skill is not the right path. Skip the feasibility check for platforms on Bap's canonical native list (Slack, Gmail, Notion, Linear, Airtable, Outlook, Google Calendar, Google Drive, Salesforce, HubSpot) and for purely internal MCPs (your own service, no external platform involved).
+2. **What tool(s) do we expose?** Name them and define the inputs/outputs. One MCP can host many tools; group by domain (e.g. one MCP for "transcription", one for "calendar admin").
+3. **Latency profile** — Vercel Hobby caps function `maxDuration` at 300s. If the tool needs longer (heavy LLM, large file processing), either chunk + parallelize internally, queue + poll, or move to Vercel Pro.
+4. **Reuse** — Will other coworkers/projects use this MCP? If yes, give it a generic name (`hyperstack-transcribe`, not `batimgie-transcribe`) and put the project in the org's Vercel + Git.
 
 ## Scaffold (Vercel + Next.js + mcp-handler)
 

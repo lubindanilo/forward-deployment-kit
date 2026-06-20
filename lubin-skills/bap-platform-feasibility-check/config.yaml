@@ -1,0 +1,31 @@
+research_time_cap_minutes_per_platform: 6
+max_results_per_angle: 5
+canonical_native_platforms_to_skip:
+  - slack
+  - gmail
+  - notion
+  - linear
+  - airtable
+  - outlook
+  - google-calendar
+  - google-drive
+  - salesforce
+  - hubspot
+verdict_priority:
+  - feasible-via-api
+  - feasible-via-mcp
+  - feasible-via-browser
+  - legally-risky
+  - infeasible
+human_stop_verdicts:
+  - legally-risky
+  - infeasible
+mcp_registries_to_check:
+  - "https://mcp.so"
+  - "https://github.com/modelcontextprotocol/servers"
+  - "https://glama.ai/mcp/servers"
+automation_tools_to_check:
+  - n8n
+  - zapier
+  - make.com
+  - pipedream

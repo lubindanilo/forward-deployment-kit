@@ -14,6 +14,7 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
 | [`bap-finding-router`](bap-finding-router/SKILL.md) | Single entry point for every HeyBap finding observed during the pipeline. Classifies SIMPLE vs COMPLEX, dispatches to `bap-bug-report` (PR on `the-agentic-company/bap` + Linear ticket in team `Bap` at status `In Review`, assignee Lubin) or `bap-feature-brainstorm` (Linear ticket at status `Triage` with label `Need More Shaping` carrying problem + 3 options + decision question, assignee Baptiste). Linear's own integrations notify the team; no direct Slack post. |
 | [`bap-capability-impact-analyzer`](bap-capability-impact-analyzer/SKILL.md) | When a finding is a *capability gap* (HeyBap can't do X today), produce a structured impact analysis: adjacent use cases the missing capability would unlock (with evidence from past transcripts and past coworker builds), effort estimate (t-shirt size + lines + surfaces), implementation sketch, go/no-go recommendation with rationale. Output feeds `bap-feature-brainstorm` (Impact section) or posts as a Linear comment when invoked standalone on an existing `BAP-<n>`. |
 | [`bap-prior-art-scout`](bap-prior-art-scout/SKILL.md) | Before generating a new coworker / skill / MCP / panel, scan the operator's prior work for similar artefacts. 5 parallel angles: workspace coworkers (`mcp__bap__coworker_list`), past local builds (`~/HeyBap Pipeline/runs/`), vault projects (`~/Personal Agents/vault/projects/`), FDK skills, personal skills. Returns ranked matches with `reuseRecipe` and a `primaryReuse` recommendation that downstream skills bake into generation (copy + swap data binding, never structural rewrite). Mirror of the impact analyzer but for the creation side. |
+| [`bap-platform-feasibility-check`](bap-platform-feasibility-check/SKILL.md) | For every external third-party platform the new coworker would interact with (Leboncoin, Se Loger, LinkedIn, Indeed, Welcome to the Jungle, Vinted, Booking, PAP, Bien Ici, Pipedrive, ...), run 5 parallel web-research angles (official API + tier, ToS posture, community MCPs / SDKs, browser-automation feasibility, known incidents) to verify the integration is actually achievable. Returns a verdict per platform (`feasible-via-api` / `feasible-via-mcp` / `feasible-via-browser` / `legally-risky` / `infeasible`) + recommended strategy + alternatives. Stops the pipeline from burning hours on an MCP whose target platform will block it on day one. |
 | [`bap-bug-report`](bap-bug-report/SKILL.md) | SIMPLE leaf. Clones the bap repo, reproduces the bug live (Chrome MCP for UI), creates a Linear ticket in team `Bap` to get an identifier (`BAP-<n>`), implements the quick fix on a branch named `fix/bap-<n>-slug`, opens a PR titled `BAP-<n> <Area>: …`, then transitions the Linear ticket to `In Review` and attaches the PR. Embeds a `FINDING_CONTEXT` JSON block in the Linear ticket description for downstream verification. |
 | [`bap-post-deploy-verify`](bap-post-deploy-verify/SKILL.md) | Closes the loop after a PR is merged + deployed. Three modes: A (re-run coworker, default), B (Chrome MCP visual repro), C (headless Playwright spec generated per finding and committed for permanent regression). Verdict on Pass: comments the Linear ticket and transitions it to `Live` (completed-type status). On Fail: opens a new Linear ticket via `bap-finding-router` labelled `Regression` and linked to the original via `relatedTo`. |
 
@@ -36,7 +37,14 @@ Field-tested skills contributed by [Lubin Danilo](https://github.com/lubindanilo
               projects + FDK + personal skills for reuse anchors
                       |
                       v
+              bap-platform-feasibility-check  (Step 1.6, parallel)
+              web research for each external platform :
+              API + tier, ToS, community MCPs, browser automation,
+              known incidents. HUMAN STOP on legally-risky / infeasible.
+                      |
+                      v
               tools resolved, custom MCPs only when no prior fits
+              AND the external platform is feasible
                       |
                       v
               bap-coworker-test-loop

@@ -293,6 +293,32 @@ Apply the result to each `neededTools[]` item:
 
 Also emit a top-level `priorArt` field on the spec consolidating the scout's full payload (`matches`, `patternsObserved`, `recommendation`). The orchestrator reads this in its Step 1.5 and may skip a second scout invocation if the payload is recent enough (`researchTimeSeconds` within 5 min of the parse time).
 
+## External-platform feasibility (web research, mandatory for non-native platforms)
+
+After the prior-art pass, for every `neededTools[]` item still classified `custom_mcp_to_build` AND whose `name` matches a specific external platform (e.g. Leboncoin, Se Loger, LinkedIn, Indeed, Welcome to the Jungle, Vinted, Booking, PAP, Bien Ici, Pipedrive), invoke [bap-platform-feasibility-check](../bap-platform-feasibility-check/SKILL.md) with the platform list. The skill runs a 5-angle web research per platform (official API + tier, ToS posture, community MCPs / SDKs, browser-automation feasibility, known incidents + alternative routes) and returns a verdict (`feasible-via-api` | `feasible-via-mcp` | `feasible-via-browser` | `legally-risky` | `infeasible`).
+
+Skip platforms that are on Bap's canonical native list (Slack, Gmail, Notion, Linear, Airtable, Outlook, Google Calendar, Google Drive, Salesforce, HubSpot). Their feasibility is settled.
+
+```
+feasibility = invoke bap-platform-feasibility-check
+  platforms: [
+    { name: "<Leboncoin>", interactionShape: "<post|read|both>", region: "<FR|EU|WW>",
+      authNeeded: "<user-credentials|api-key|none>", frequency: "<one-shot|daily|hourly|realtime>",
+      context: "<one-line from the transcript>" },
+    ...
+  ]
+  options: { researchTimeCapMinutesPerPlatform: 6 }
+```
+
+Apply the result to each `neededTools[]` item:
+
+- `feasible-via-mcp`: downgrade `kind` to `existing_workspace_mcp` with `mcpUrl` pointing at the community MCP. The orchestrator surfaces a HUMAN STOP to bind it instead of building one.
+- `feasible-via-api`: keep `kind: custom_mcp_to_build`, attach `apiTier` + `authScheme` from the evidence. The orchestrator builds a thin wrapper MCP using the documented API.
+- `feasible-via-browser`: emit a `kind: sandbox_browser_automation` tag (new value) with a `playwrightStrategy` note. The orchestrator routes to Playwright in the Bap sandbox, not `build-mcp-for-bap`.
+- `legally-risky` or `infeasible`: emit `kind: blocked` with `feasibilityVerdict` + `recommendedAlternative` from the skill output. The orchestrator surfaces a HUMAN STOP before any scaffolding starts; the operator decides whether to override, pick a different platform, or scope the agent without this tool.
+
+Also emit a top-level `platformFeasibility` field on the spec consolidating the full payload (`platforms[*]`, `crossPlatformNotes`, `overallVerdict`, `humanStopRequired`). The orchestrator reads this at Step 1.5.
+
 ## Invocation patterns
 
 ### Direct, from Claude Code
