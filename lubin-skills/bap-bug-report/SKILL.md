@@ -2,16 +2,23 @@
 name: bap-bug-report
 description: |
   Deeply analyse a bug or feature request in the Bap repo
-  (the-agentic-company/bap), implement the fix on a branch, open a Pull
-  Request on GitHub, and create a Linear ticket in team `Bap` (key BAP)
-  at status `In Review`, labelled `Bug` (or `Feature`) + `Dogfooding`,
-  assigned to the operator (Lubin), with the PR attached as a link. Linear's
-  notifications (Slack integration, email, in-app) replace any direct
-  Slack post. Use when the user describes a bug or feature gap in Bap
-  / HeyBap (chat, coworker output, attachments, MCP, skills UI, run
-  flow…) and wants the fix proposed as a PR + a tracked Linear ticket
-  without manual copy-paste. Triggers: "Bug: …", "Feature: …", "ouvre
-  un ticket pour …", "open a PR for …", "audit the bug …".
+  (the-agentic-company/bap). Investigation is **mandatory and exhaustive**:
+  Step 3 fans out 5 parallel subagents (Agent tool, general-purpose / Explore)
+  over symptom-to-root-cause walk, caller graph, adjacent implementations,
+  test contract, and git history before any code is written. Step 4
+  enumerates 2 to 3 grounded alternatives and picks the one that
+  minimises new code (reuse existing abstractions, no new files,
+  additive over contract-modifying). Then implements the smallest fix
+  on a branch, opens a Pull Request, and creates a Linear ticket in
+  team `Bap` (key BAP) at status `In Review`, labelled `Bug` (or
+  `Feature`) + `Dogfooding`, assigned to the operator (Lubin), with the
+  PR attached as a link. Linear's notifications (Slack integration,
+  email, in-app) replace any direct Slack post. Use when the user
+  describes a bug or feature gap in Bap / HeyBap (chat, coworker output,
+  attachments, MCP, skills UI, run flow…) and wants the best-shaped fix
+  proposed as a PR + a tracked Linear ticket without manual copy-paste.
+  Triggers: "Bug: …", "Feature: …", "ouvre un ticket pour …",
+  "open a PR for …", "audit the bug …".
 ---
 
 # Bap bug / feature → PR + Linear ticket
@@ -72,34 +79,74 @@ Skip Chrome reproduction only for purely backend / non-visual bugs. Justify the 
 
 The visual evidence refines the diagnosis. It does not replace the code-level root cause.
 
-## Step 3 — investigate the codebase in depth (use the Agent tool)
+## Step 3 — deep codebase research (mandatory, fan out before fixing)
 
-Delegate to a subagent (`general-purpose` or `Explore`) with a self-contained briefing including:
+**Non-negotiable.** Picking the first plausible fix and shipping is the failure mode this step exists to prevent. The goal is to find the *best* way to fix the bug or build the feature, with the smallest blast radius and zero new regressions. The first idea is rarely the best one; the codebase usually contains an existing pattern that fits and reusing it beats inventing a new one.
 
-- The exact bug / feature description.
-- The repo path on disk.
-- The known monorepo layout above.
-- The Chrome findings from Step 2 (screenshots, console errors, computed styles).
-- An instruction to check **both** the chat surface and the coworker surface when the issue could exist in either (asymmetry is a common Bap pattern, see Historical Bugs at the bottom).
-- A requirement that every claim carries a `file:line` reference.
+Run this step in **parallel** via the Agent tool. Launch the angles below as separate subagents in a single message (one `general-purpose` or `Explore` agent per angle, briefed self-contained). Each subagent returns a structured report with `file:line` evidence for every claim. The skill aggregates the reports and only then proceeds to Step 4.
 
-Cover systematically:
+### Mandatory angles (each is one subagent)
+
+1. **Symptom → root cause walk.** Start at the symptom (the file the user sees breaking, the failing log line, the missing toast). Trace **backwards** through the call graph until you reach a function whose return value or side effect *fully explains* the symptom. Stop at "this is the line that does it", not at "this looks suspicious". Output: an ordered chain of `file:line` references from symptom to root cause, each with one sentence on what it does.
+
+2. **Caller graph of the change site.** Find every place that calls the function / reads the constant / depends on the behaviour you are about to change. Use `rg`, `ast-grep` if installed, or LSP if Bap is open in an editor. For each caller, note whether the proposed change would break its current contract. **A fix that updates one site and breaks three others is not a fix.**
+
+3. **Adjacent implementations.** Find 2 to 3 places in the same repo where a *similar problem was already solved* (similar shape, different domain). Examples: another orpc router that solves the same validation pattern, another component that already wires the missing listener, another service that already handles the size limit you are about to lift. These are the templates. If none exists, say so explicitly; that is itself a signal that the change is novel.
+
+4. **Test contract.** List every test file under `apps/*/test/`, `packages/*/test/`, `__tests__/`, or matching `*.spec.*` / `*.test.*` that touches the change site or one of its callers. For each, summarise in one line *what behaviour it locks in*. The fix must keep every existing test green; if a test must change, that is a signal of contract change and belongs in the PR body. If the area has zero test coverage, flag it.
+
+5. **History lens (`git log` + `git blame`).** Why does the code look the way it does today? Run `git log --oneline -10 -- <change-site>` and `git blame <change-site>` on the offending line. If a recent commit introduced the symptom, name it. If the code was deliberately written this way (a known constraint, a TODO comment, a related PR description), respect that intent or call it out before overriding it.
+
+Run angles 1-5 **concurrently** in a single Agent tool call message (5 subagent invocations in parallel). Wait for all to return before proceeding. If any angle returns "nothing found", do not silently skip; record it explicitly so Step 4 knows what evidence is missing.
+
+### Synthesise (after subagents return)
+
+Produce three things, in this order:
+
+- **Root cause statement**: one paragraph, file:line anchored, derived from angle 1 + angle 5.
+- **Constraints map**: what the fix MUST preserve (test contract, caller assumptions, deliberate prior design choices from angle 5). One bullet each.
+- **Pattern match**: is there an existing adjacent implementation (angle 3) the fix can reuse? Name it. If yes, the fix is a *replication / extension*; if no, the fix is *novel* and you must justify why no existing pattern fits.
+
+### Systematic coverage check (still required, in addition to the angles above)
 
 1. Frontend filters / validation — `accept=`, MIME whitelists, size caps, silent `.filter(...)` drops, dropzone configs.
 2. Client → server boundary — orpc routers, payload serialization (`dataUrl` base64 in JSON body is a known cost center).
 3. Server services — sandbox limits, storage validation.
-4. Surface asymmetry.
-5. UX feedback — silent drops with no toast/error.
+4. Surface asymmetry (chat vs coworker, prod vs prototype) — Bap's most common bug shape.
+5. UX feedback — silent drops with no toast / error.
 6. **DO NOT assume Vercel, S3, Cloudflare, etc.** Bap is **not** on Vercel. Frame body-limit / runtime claims as "any host body limit", not vendor-specific.
 
-## Step 4 — design the fix, honestly
+## Step 4 — design the fix, honestly (alternatives mandatory, simplest wins)
+
+Before committing to a fix, **enumerate 2 to 3 alternative approaches** grounded in the research from Step 3. Each alternative must:
+
+- Be technically possible given the constraints map.
+- Touch a different surface or use a different abstraction (so the comparison is real, not cosmetic).
+- Carry an honest trade-off line: what does it cost that the others do not (lines, surfaces touched, test churn, regression risk, performance, learning curve for the next person reading it).
+
+Pick the alternative that **minimises new code while resolving the root cause**, preferring:
+
+- Reusing an existing abstraction from Step 3 angle 3 over inventing a new one.
+- Editing one site over editing two (when the constraints map allows).
+- Lifting a constant or wiring a missing listener over restructuring a module.
+- A change whose every caller (Step 3 angle 2) keeps the same contract over a change that requires updating callers.
+
+**Anti-complexification rules** (apply to every fix, no exceptions):
+
+- No new abstraction (function, hook, service, type) unless an existing one demonstrably cannot be reused.
+- No new file unless the existing files cannot host the change.
+- No defensive code for cases that cannot happen given the call graph (Step 3 angle 2). Trust the boundaries you traced.
+- No comments explaining the bug in the code itself; the Linear ticket and PR body own that.
+- No unrelated cleanup. The diff is for the bug at hand, not for the codebase at large.
+- No "while I am here" refactor. Open a separate ticket for it if the urge is real.
 
 Produce:
 
 - **Quick fix** (the 10-minute unblock). This is what the PR will implement. Often: raise a constant, replace a silent `.filter()` with a toast, add a missing listener, copy a hook from the working surface to the broken one.
-- **Durable fix** (the structural property). Goes in the PR body and the Linear ticket as a follow-up note, not as code. Describe the **property** the fix should have, not a specific transport / vendor.
-- **Alternatives considered**: 2-3 bullets, one line each, trade-offs.
+- **Durable fix** (the structural property). Goes in the Linear ticket as a follow-up note, not as code. Describe the **property** the fix should have, not a specific transport / vendor.
+- **Alternatives considered**: 2-3 bullets from the enumeration above, one line each + the trade-off + why you didn't pick it.
 - **Implications**: which other surfaces / hooks / constants get touched, migration concerns, data impact.
+- **Regression risk**: for each caller from Step 3 angle 2, one line stating "no change to contract" or "contract changes in this way; mitigated by …". If any caller is *not* covered by an existing test, flag it as `test gap`.
 
 ## Step 5 — dedup check (mandatory, before any side effect)
 
@@ -158,24 +205,33 @@ mcp__linear__save_issue({
 <une ligne : ce que voit l'utilisateur>
 
 ## Cause racine
-<2-4 lignes, ancrées sur file:line>
+<2-4 lignes, ancrées sur file:line, chaîne symptôme → cause issue de Step 3 angle 1>
 
 ## Fix proposé (quick)
 <le diff de la PR, file:line touché>
+<référencer le pattern adjacent réutilisé (Step 3 angle 3) si applicable>
 
 ## Fix durable (suivi, pas dans cette PR)
 <la propriété structurelle que le fix devrait avoir>
 
-## Alternatives considérées
-- <option 1> : <trade-off>
-- <option 2> : <trade-off>
+## Alternatives considérées (3 max)
+- <option 1> : <trade-off + raison de ne pas l'avoir choisie>
+- <option 2> : <trade-off + raison>
+- <option 3 (si applicable)> : <trade-off + raison>
+
+## Callers vérifiés (regression check)
+<liste des callers identifiés Step 3 angle 2, un par ligne : "<file:line> : contrat préservé" ou "<file:line> : contrat modifié, mitigation = …">
+
+## Tests existants dans la zone
+<liste des tests issues Step 3 angle 4, un par ligne : "<test:line> : verrouille <behaviour>">
+Si aucun test : "test gap : <surface non couverte>"
 
 ## Repro
 <une ligne : où cliquer dans https://heybap.com>
 Screenshots : <chemins locaux, à uploader manuellement si besoin>
 
 ## Régression connue
-<commit hash + subject si trouvé, sinon "non identifié">
+<commit hash + subject si trouvé via Step 3 angle 5, sinon "non identifié">
 
 <!-- FINDING_CONTEXT
 {
@@ -231,6 +287,8 @@ Slug rules: kebab-case, ≤4 words, derived from the bug noun (e.g. `chat-column
 - No new abstractions for hypothetical future use.
 - If the durable fix is large (new hook, new endpoint, new component), it does NOT go in this PR. Mention it in the ticket's "Fix durable" section for follow-up.
 - For **feature requests**: if the implementation is larger than ~50 lines, open a **draft** PR with the smallest scaffold and a detailed TODO list in the body. Do not autonomously ship a 500-line feature without review.
+
+**Pre-commit regression sweep (mandatory)**: before staging the change, re-open each caller from Step 3 angle 2 and confirm the contract still holds. Then run any test file from Step 3 angle 4 that touches the change site, locally, and observe a green pass. If a test breaks unexpectedly, do not edit the test to make it pass; treat the breakage as new evidence that the fix is wrong and return to Step 4 to pick a different alternative.
 
 Commit with a Bap-style message that references the ticket:
 
@@ -321,6 +379,10 @@ Use as sanity checks if the current bug sounds similar:
 - Do not post to Slack from this skill. Linear's integrations broadcast create / update events; that is the team's chosen notification surface.
 - Do not open the PR before the Linear ticket. The ticket identifier needs to be in the branch + title.
 - Do not skip the FINDING_CONTEXT JSON block. The post-deploy verifier depends on it to close the loop.
+- Do not skip Step 3's parallel-subagent fan-out, even on "obvious" bugs. The cost of one wasted research pass is 30 seconds; the cost of one wrong fix shipped is hours of regression. The 5 angles are mandatory.
+- Do not pick the first plausible fix in Step 4. Enumerate 2 to 3 alternatives grounded in Step 3 and pick on the rubric (reuse > extend > additive > smallest surface). The "Alternatives considérées" section must be real, not retrofitted.
+- Do not introduce a new abstraction, hook, service, or file when Step 3 angle 1 returned an adjacent implementation. Reuse the adjacency or explain why it does not fit.
+- Do not edit a test to make it pass after the fix. A test break is evidence the fix is wrong; return to Step 4 and pick a different alternative.
 
 ## Config
 

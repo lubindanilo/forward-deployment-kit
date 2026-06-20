@@ -3,16 +3,24 @@ name: bap-capability-impact-analyzer
 description: |
   Given a HeyBap capability gap (something the platform cannot do today,
   blocking one or more coworker builds), produce a structured impact
-  analysis: which adjacent use cases the missing capability would unlock,
-  effort estimate (lines, files, surfaces, t-shirt size), implementation
-  sketch, and a go / no-go recommendation with rationale. Output is
-  consumable by `bap-feature-brainstorm` (which adds an "Impact" section
-  to the Linear ticket it creates) or by the operator standalone when
-  triaging an existing `BAP-<n>` feature ticket. Use when the orchestrator
-  surfaces a gap (`parse-transcript-to-agent-spec` `ambiguities[]` or
-  `notBuilt[]` blocked by HeyBap), when the router classifies a finding
-  as COMPLEX feature, or when a teammate asks "is feature X worth
-  building, and what else would it unlock?".
+  analysis. Step 3 fans out 5 parallel subagents (Agent tool,
+  general-purpose / Explore) over adjacency map, surface inventory,
+  caller graph, test contract, and git history to find the **simplest
+  viable shape**: which existing abstraction in `the-agentic-company/bap`
+  the new capability can reuse, what files / surfaces would actually be
+  touched, whether the change is additive or contract-modifying. Output:
+  use cases unlocked (with evidence), effort estimate (t-shirt size +
+  lines + surfaces + confidence), implementation sketch anchored on the
+  adjacency it reuses (no new abstractions when an existing one fits),
+  and a go / no-go recommendation with rationale. Consumable by
+  `bap-feature-brainstorm` (which adds an "Impact" section to the Linear
+  ticket it creates, with the 3 options grounded in the sketch's
+  adjacency) or by the operator standalone when triaging an existing
+  `BAP-<n>` feature ticket. Use when the orchestrator surfaces a gap
+  (`parse-transcript-to-agent-spec` `ambiguities[]` or `notBuilt[]`
+  blocked by HeyBap), when the router classifies a finding as COMPLEX
+  feature, or when a teammate asks "is feature X worth building, what
+  is the simplest way to ship it, and what else does it unlock?".
 ---
 
 # Capability impact analyzer for HeyBap
@@ -75,43 +83,93 @@ Each build under `${skillFolderRoot}/<callId>/` has an `agent-spec.json` (the pa
 
 Each hit becomes a `useCasesUnlocked[]` entry: the coworker that would have been built if the capability had existed, with a reference to the run that surfaced the block.
 
-## Step 3 — estimate effort (clone bap, focus the lens)
+## Step 3 — deep codebase research for effort + reuse (mandatory, fan out)
 
-Goal: a defensible t-shirt size (S < 100 lines, M 100-300, L 300-800, XL > 800), not a precise count.
+The goal of this step is not just an effort number; it is to find the **simplest viable shape** for the capability, anchored in the existing codebase. Picking the first plausible implementation path is the failure mode this step prevents. The best implementation is almost always the one that reuses an existing abstraction; the worst is the one that invents a new pattern parallel to one that already exists.
 
-1. Clone (or reuse) `the-agentic-company/bap` locally under `/tmp/bap-impact-<timestamp>` or pull a recent clone.
-2. Locate the surfaces the capability would touch. Grep for the most relevant noun (`workspace_mcp`, `coworker_schedule`, `panel_introspection`).
-3. Read the closest existing implementation that does *adjacent* work. Adjacent = similar shape, different domain. A new "list workspace MCPs" tool is adjacent to "list coworkers" (already exists). The delta from adjacent to new is a fair size proxy.
-4. Identify the boundaries the change crosses: orpc router (1 file), db schema (1 file, migration risk), settings UI (1-2 files), MCP tool registration (1 file), tests (1 file). Each boundary adds ~30-80 lines.
-5. Cap research time at `options.researchTimeCapMinutes` (10 by default). If at the cap the estimate is still uncertain, return `tShirtSize: "L"` with a `confidence: "low"` and a list of unknowns.
+Clone (or reuse) `the-agentic-company/bap` locally under `/tmp/bap-impact-<timestamp>` or pull a recent clone. Then run the angles below as **parallel subagents** (Agent tool, `general-purpose` or `Explore`, one per angle, in a single message). Each returns a structured report with `file:line` evidence.
 
-Output:
+### Mandatory angles (one subagent each, parallel)
+
+1. **Adjacent implementation map.** Find 2 to 3 places in the repo where a *similar shape* already exists. Adjacent = same kind of work, different domain. A new "list workspace MCPs" tool is adjacent to "list coworkers" (already exists, follow that shape). A new schedule trigger is adjacent to the existing `coworker.trigger` orpc router. For each adjacency, give the `file:line` entry point and one sentence on what its contract is. The delta from adjacent-to-new is the size proxy.
+
+2. **Surface inventory.** Walk every surface the capability would touch end-to-end: orpc router, server service, db schema, sandbox glue, MCP tool registration, frontend (chat + coworker output, both, when applicable), settings UI, tests. For each: existing files in the area, whether the change is "extend existing file" or "new file required" (the former is always cheaper), and the contract that surface owes to its callers.
+
+3. **Dependency + caller graph.** What already calls into the surfaces from angle 2? Will the change extend those callers' contract or merely add a new entry point? An additive change (new tool, new route) is cheaper than a contract change (new column, new required arg). If the change is contract-modifying, list every caller that would need updating.
+
+4. **Test contract in the area.** List every test under `apps/*/test/`, `packages/*/test/`, `__tests__/`, matching `*.spec.*` / `*.test.*` that touches the area. For each: what behaviour it locks in. A capability that fits within the existing test contract is cheaper than one that requires new test scaffolding.
+
+5. **History lens.** `git log --oneline -20 -- <area>` and `git blame` on the closest adjacent implementation. Why is the code shaped the way it is? If a deliberate prior design choice exists (a `do-not-touch` comment, a related PR description, a TODO that was explicitly deferred), respect it or flag the conflict.
+
+Run angles 1-5 **concurrently** (5 subagent invocations in a single Agent message). Wait for all returns before synthesising.
+
+### Synthesise (after subagents return)
+
+Produce, in this order:
+
+- **Simplest viable shape**: one paragraph. Reuse the adjacent implementation from angle 1 verbatim if you can; if not, justify the deviation. Identify whether the change is *extend an existing file* (cheap) or *new file* (more expensive).
+- **Boundaries crossed**: from angle 2, count files / surfaces touched.
+- **Caller impact**: from angle 3, list whether the change is additive (no caller churn) or contract-modifying (caller updates required).
+- **Test coverage**: from angle 4, list which existing tests cover the area; flag gaps.
+- **History constraints**: from angle 5, list any prior design choice the new capability must respect.
+
+### Output
 
 ```json
 {
   "linesChanged": 180,
   "filesTouched": 4,
   "surfacesAffected": ["orpc router (coworker_workspace_mcp_*)", "settings UI", "MCP tool registration", "db schema migration"],
-  "tShirtSize": "M",
+  "tShirtSize": "M",                 // S < 100, M 100-300, L 300-800, XL > 800
   "confidence": "medium",
-  "unknowns": ["whether the existing OAuth flow can be reused or needs a new dance"]
+  "unknowns": ["whether the existing OAuth flow can be reused or needs a new dance"],
+  "adjacencyReused": "packages/core/src/server/services/sandbox-file-service.ts:42 (similar shape)",
+  "callerImpact": "additive (no existing caller needs updating)",
+  "testCoverage": "packages/core/test/coworker.test.ts:118-205 covers the adjacent area; new tool needs ~30 lines of test, no scaffolding",
+  "historyConstraints": "none; OAuth dance was deliberately limited to UI per Baptiste commit 9f3a2c1"
 }
 ```
 
-## Step 4 — sketch how it would be implemented
+Cap research time at `options.researchTimeCapMinutes` (10 by default). If at the cap the estimate is still uncertain, return `tShirtSize: "L"` with `confidence: "low"` and a list of unknowns. Do not bluff a number that the angles did not support.
 
-One short paragraph, three to five lines, file-anchored. Not a PR diff; an implementation outline that the brainstorm skill can use as substrate for its three options. Example:
+## Step 4 — sketch how it would be implemented (anti-complexification)
+
+One short paragraph, three to five lines, file-anchored, **derived from the Step 3 angle 1 adjacency**. Not a PR diff; an implementation outline that the brainstorm skill can use as substrate for its three options.
+
+**Rules** (apply to every sketch):
+
+- Reuse before inventing. If angle 1 found an adjacent implementation, the sketch must model on it (and name the file:line entry point); justify any deviation in one sentence.
+- Extend before creating. If angle 2 found an existing file that can host the change, the sketch must put the change there; do not propose a new file when an existing one fits.
+- Additive before contract-modifying. If angle 3 says additive is possible, the sketch must take the additive path; only propose a contract change if angle 3 rules out additive.
+- No new abstraction (service, hook, type, schema) unless angle 1 returned "no adjacency"; in that case, say so explicitly in the sketch.
+- No defensive code for cases the caller graph (angle 3) rules out.
+- Smallest surface that resolves the gap. If a one-line lift solves it, the sketch is one line; do not invent surfaces to make the change feel substantive.
+
+Example sketch (good):
 
 ```
-Add an orpc router `coworker.workspace_mcp.create({ url, oauthConfig })` that
-calls into a new `packages/core/src/server/services/workspace-mcp-bind.ts`
-(modeled on the existing `sandbox-file-service.ts`). Store the MCP record in
-`packages/db/src/schema/workspace_mcp.ts` (new column `bindMethod: "ui" | "api"`).
-Expose an MCP tool `bap.workspace_mcp_create` so meta-coworkers can bind without
-the UI. Settings UI calls the same router; no behavioural change for human users.
+Add an orpc router `coworker.workspace_mcp.create({ url, oauthConfig })` modelled
+on the existing `coworker.create` router at apps/web/src/server/router/coworker.ts:54.
+Reuse the OAuth handler from packages/core/src/server/services/workspace-mcp-oauth.ts:18
+(already used by the Settings UI; no new dance needed). Persist the new
+`bindMethod: "ui" | "api"` column via a single-column migration on the existing
+`workspace_mcp` table (packages/db/src/schema/workspace_mcp.ts:12). Settings UI calls
+the same router; additive only, no contract change for human users. Adjacency: the
+"list coworkers" router is the same shape (file:line confirmed in Step 3 angle 1).
 ```
 
-Stay agnostic on the *which* of the brainstorm's three options. The brainstorm picks.
+Example sketch (bad — what to avoid):
+
+```
+Introduce a new MCPBindOrchestrator service layered above the existing OAuth flow
+with a pluggable dispatch strategy and a new event bus to coordinate between the UI
+and the API path. Add a new MCP introspection protocol so meta-coworkers can negotiate
+the bind asynchronously.
+```
+
+(Bad because: invents two new abstractions (orchestrator + event bus), proposes a new protocol when an additive router would do, no adjacency reused.)
+
+Stay agnostic on the *which* of the brainstorm's three options. The brainstorm picks; this sketch is the substrate, not the answer.
 
 ## Step 5 — list adjacent use cases unlocked
 
@@ -237,6 +295,9 @@ Returns the payload AND posts a Linear comment on BAP-42.
 - Listing strawman adjacent use cases. Each entry must have a concrete evidence reference (transcript id, ticket, build). Speculation dilutes the signal.
 - Returning `verdict: "implement"` when the t-shirt is XL and a workaround exists. The rubric is explicit; do not override it because the use case is exciting.
 - Posting the Linear comment when `ticketRef` is not set. The comment is opt-in via the input; otherwise the caller decides where to surface the payload.
+- Skipping the Step 3 parallel angles and producing a t-shirt size from a single grep pass. Without the adjacency map (angle 1) the sketch will invent abstractions that already exist in the codebase.
+- Proposing a new file / new abstraction in Step 4 when an existing one fits (angles 1 and 2 must rule it out first). The brainstorm options can revisit; the sketch must default to the simplest viable shape.
+- Returning `verdict: "implement"` while the sketch invents a parallel pattern to an existing one. Reusing the adjacency from angle 1 is mandatory before that verdict.
 
 ## Config
 
