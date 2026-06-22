@@ -12,8 +12,9 @@ description: |
   on a branch, opens a Pull Request, and creates a Linear ticket in
   team `Bap` (key BAP) at status `In Review`, labelled `Bug` (or
   `Feature`) + `Dogfooding`, assigned to the operator (Lubin), with the
-  PR attached as a link. Linear's notifications (Slack integration,
-  email, in-app) replace any direct Slack post. Use when the user
+  PR attached as a link. Then posts a structured message in Slack `#dev`
+  with the original problem, the fix applied, and an `@Baptiste` ping
+  asking for review. Use when the user
   describes a bug or feature gap in Bap / HeyBap (chat, coworker output,
   attachments, MCP, skills UI, run flow…) and wants the best-shaped fix
   proposed as a PR + a tracked Linear ticket without manual copy-paste.
@@ -25,7 +26,7 @@ description: |
 
 Goal: the user gives a short one-line bug or feature description; you investigate the Bap codebase in depth; you **create a Linear ticket in team `Bap` first to obtain its identifier (e.g. `BAP-123`), then implement the fix on a branch in `the-agentic-company/bap`, open a Pull Request that references the ticket identifier in its title, and update the Linear ticket to status `In Review` with the PR attached as a link**.
 
-The Linear ticket is the report. Linear's own integrations notify the team on create / update; no direct Slack post is sent from this skill.
+The Linear ticket is the durable report. A follow-up `#dev` Slack message restates the problem, summarises the fix, and pings Baptiste so the review request lands in his Slack inbox (the surface he watches).
 
 ## Repo & context (always)
 
@@ -348,7 +349,38 @@ Linear's GitHub integration usually attaches the PR automatically once the branc
 
 `links` is append-only, so re-running this step in a retry is safe.
 
-## Step 10 — return to the user
+## Step 10 — Slack `#dev` notification (problem + fix + ping Baptiste for review)
+
+Required for every shipped PR. The team relies on this message — not on Linear's auto-broadcast — to know what is ready for review. Skip it and Baptiste does not learn the PR exists until he opens Linear on his own.
+
+Resolve identifiers:
+
+- channel id from `config.yaml` (`slack.dev_channel_id`); if it is the placeholder, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_channels({ query: "dev" })` and cache for the session.
+- reviewer id from `config.yaml` (`slack.review_user_id`); if missing, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_users({ query: "Baptiste" })`.
+
+Body template (Slack mrkdwn):
+
+```
+:hammer_and_wrench: *BAP-<n>* <ticket title>
+
+*Problem.* <one or two sentences restating the symptom in plain language — what the user observed, no jargon>
+
+*Fix.* <one or two sentences naming the file(s) touched, the reuse anchor (or "new abstraction" if unavoidable), and the diff size — e.g. "Added `runStatus` prop to `EmptyPreview`, reuses existing `LoadingState`. +36 / -5 across 3 files.">
+
+PR <URL> · commit `<sha-short>` · <lines> lines · <files-touched> files
+<@<reviewer-id>> ready for your review.
+```
+
+Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (channel_id from config).
+
+Constraints:
+
+- Exactly one message per PR. Do not re-post on PR updates; reply in the same thread instead.
+- The reviewer ping (`<@U…>`) is required — it is the whole point of the message; remove it and the notification is silent.
+- Problem and Fix are user-facing summaries, not raw ticket / commit text. Avoid em-dashes (the team's house style).
+- Capture the `permalink` returned by `slack_send_message` and include it in the Step 11 return value as `slackPermalink`.
+
+## Step 11 — return to the user
 
 Output exactly three blocks, no commentary, no headers:
 
@@ -376,7 +408,8 @@ Use as sanity checks if the current bug sounds similar:
 - Do not assume Vercel / S3 / specific vendors unless the repo already uses them.
 - Do not claim something is broken without a `file:line` proof.
 - Do not use em-dashes anywhere (commit message, PR title, PR body, Linear ticket).
-- Do not post to Slack from this skill. Linear's integrations broadcast create / update events; that is the team's chosen notification surface.
+- Do not skip Step 10's Slack `#dev` notification. The team relies on the explicit problem + fix summary and the Baptiste ping to know what is ready for review; Linear's auto-broadcast alone is not enough.
+- Do not drop the `<@reviewer-id>` ping from the Slack message. Without it, the post is silent and the review never starts.
 - Do not open the PR before the Linear ticket. The ticket identifier needs to be in the branch + title.
 - Do not skip the FINDING_CONTEXT JSON block. The post-deploy verifier depends on it to close the loop.
 - Do not skip Step 3's parallel-subagent fan-out, even on "obvious" bugs. The cost of one wasted research pass is 30 seconds; the cost of one wrong fix shipped is hours of regression. The 5 angles are mandatory.

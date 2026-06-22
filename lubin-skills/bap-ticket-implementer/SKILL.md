@@ -7,8 +7,9 @@ description: |
   `the-agentic-company/bap` repo using the same deep-research 5-subagent
   pattern as `bap-bug-report` (symptom → cause walk, callers, adjacency,
   tests, history), commits the result, opens or updates the PR, then
-  posts a one-line notification in Slack `#dev` with the commit + PR
-  link. The ticket gets a Linear comment with the SHA, and (if the
+  posts a structured notification in Slack `#dev` with the original
+  problem, the fix applied, the PR + commit, and an `@Baptiste` ping
+  for review. The ticket gets a Linear comment with the SHA, and (if the
   ticket was at `Triage`) is transitioned to `In Review`. Designed to
   drain low-friction items off the queue overnight; refuses to act on
   tickets that lack acceptance criteria, have unresolved comments, or
@@ -19,7 +20,7 @@ description: |
 
 # Autonomous Linear ticket implementer
 
-`bap-bug-report` creates tickets with a proposed fix; this skill closes the gap when nobody picks them up. It pulls assigned tickets with the explicit opt-in label `agent-autonomous`, implements the work, commits, opens / updates the PR, comments the ticket, and notifies Slack `#dev` so the team sees what was just shipped.
+`bap-bug-report` creates tickets with a proposed fix; this skill closes the gap when nobody picks them up. It pulls assigned tickets with the explicit opt-in label `agent-autonomous`, implements the work, commits, opens / updates the PR, comments the ticket, and posts a `#dev` message with the original problem + fix summary + a Baptiste ping so the review request lands where Baptiste actually looks for them.
 
 Designed for the calm cases: a small fix, the proposed solution is already written on the ticket, the operator is asleep / in a meeting / off, and the queue can drain on its own. **Refuses** to touch anything ambiguous, large, or controversial.
 
@@ -207,21 +208,31 @@ mcp__linear__save_issue({ id: "BAP-<n>", state: "<config.linear.statuses.in_revi
 
 If it was already at `In Review`, no transition.
 
-## Step 8 — Slack `#dev` notification (one-liner)
+## Step 8 — Slack `#dev` notification (problem + fix + ping Baptiste for review)
 
-Post a single message in `#dev` summarising what just shipped. Resolve the channel id from `config.yaml` (`slack.dev_channel_id`) or via `slack_search_channels({ query: "dev" })` if the id is the placeholder.
+Post a structured message in `#dev` summarising what just shipped and ask Baptiste to review.
 
-Body:
+Resolve identifiers:
+
+- channel id from `config.yaml` (`slack.dev_channel_id`); fall back to `slack_search_channels({ query: "dev" })` if the placeholder is still in place.
+- reviewer id from `config.yaml` (`slack.review_user_id`); fall back to `slack_search_users({ query: "Baptiste" })` if missing.
+
+Body template (Slack mrkdwn):
 
 ```
-:robot_face: BAP-<n> implemented autonomously: <one-line ticket title>
+:robot_face: *BAP-<n>* <ticket title> — implemented autonomously
+
+*Problem.* <one or two sentences restating the symptom in plain language — pull from the ticket's "Problem" / "Symptôme" section, do not paste raw>
+
+*Fix.* <one or two sentences naming the file(s) touched, the reuse anchor, and the diff size — e.g. "Reused `LoadingState`. +36 / -5 across 3 files.">
+
 PR <URL> · commit `<sha-short>` · <lines> lines · <files-touched> files
-Verification will run after merge + deploy.
+<@<reviewer-id>> ready for your review. Post-deploy verification will run after merge.
 ```
 
 Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (channel_id from config).
 
-One message per PR. Do not @mention anyone — Linear handles assignee notifications; Slack is the activity feed.
+One message per PR. The `<@U…>` reviewer ping is required — it is the whole point of the post. On a re-implementation (loop tick later updating the same PR), reply in the thread of the original message rather than posting a new top-level message; the thread reply does NOT need to re-ping Baptiste.
 
 ## Step 9 — return to caller / log
 
@@ -262,6 +273,7 @@ The cap of 5 implementations per tick prevents a runaway loop from carpet-bombin
 - Implementing when the last comment is a question or a `wait` / `blocked` marker. The operator is doing something with this ticket; do not race.
 - Carpet-bombing PRs in a single tick. Cap of 5 implementations per `/loop` invocation is hard.
 - Posting to Slack without including the PR URL + commit SHA + line counts. The notification IS the proof of work; minus those refs it is noise.
+- Posting to Slack without the original problem + fix summary or without the Baptiste ping. The review request never starts; the activity-feed-only format is no longer the team norm.
 - Re-implementing a ticket whose PR is already open and CI-green. Check the existing PR first; if it solves the ticket, comment and stop, do not duplicate.
 - Forgetting the FINDING_CONTEXT downstream contract. `bap-post-deploy-verify` reads it from the Linear ticket; if it is missing, fail eligibility instead of generating one (would lose the original signal).
 
@@ -278,7 +290,8 @@ linear:
   in_review_status: "423d89b9-126c-4db1-aa27-05b25baafd20"
 slack:
   workspace: "The Agentic Company"
-  dev_channel_id: "REPLACE_WITH_DEV_CHANNEL_ID"   # set once via slack_search_channels({ query: "dev" })
+  dev_channel_id: "C0AH3JU73E0"   # #dev — set once via slack_search_channels({ query: "dev" })
+  review_user_id: "U0A87JNV8QP"   # Baptiste — set once via slack_search_users({ query: "Baptiste" })
 github:
   repo: "the-agentic-company/bap"
   branch_prefix: "fix/bap-"
@@ -291,7 +304,7 @@ limits:
 log_path: "~/HeyBap Pipeline/logs/ticket-implementer.jsonl"
 ```
 
-If `dev_channel_id` is the placeholder, the skill resolves it at runtime via `slack_search_channels({ query: "dev" })` and caches the result in memory for the rest of the session.
+If `dev_channel_id` or `review_user_id` is missing / a placeholder, the skill resolves it at runtime (via `slack_search_channels({ query: "dev" })` and `slack_search_users({ query: "Baptiste" })`) and caches the result in memory for the rest of the session.
 
 ## See also
 

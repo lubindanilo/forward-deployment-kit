@@ -10,7 +10,8 @@ linear:
     in_review: "423d89b9-126c-4db1-aa27-05b25baafd20"
 slack:
   workspace: "The Agentic Company"
-  dev_channel_id: "REPLACE_WITH_DEV_CHANNEL_ID"   # resolved at runtime via slack_search_channels({ query: "dev" }) if placeholder
+  dev_channel_id: "C0AH3JU73E0"   # #dev — resolved at runtime via slack_search_channels({ query: "dev" }) if missing
+  review_user_id: "U0A87JNV8QP"   # Baptiste (CTO, reviewer) — resolved via slack_search_users({ query: "Baptiste" }) if missing
 github:
   repo: "the-agentic-company/bap"
   branch_prefix: "fix/bap-"

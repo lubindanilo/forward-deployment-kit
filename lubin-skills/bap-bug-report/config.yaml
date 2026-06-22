@@ -15,3 +15,7 @@ linear:
     live: "1a4d7932-5cb0-409a-8bcc-33d4bcf23bb8"
 github_repo: "the-agentic-company/bap"
 dedup_window_days: 60
+slack:
+  workspace: "The Agentic Company"
+  dev_channel_id: "C0AH3JU73E0"   # #dev — resolved at runtime via slack_search_channels({ query: "dev" }) if missing
+  review_user_id: "U0A87JNV8QP"   # Baptiste (CTO, reviewer) — resolved via slack_search_users({ query: "Baptiste" }) if missing
