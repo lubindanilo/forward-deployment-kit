@@ -1,23 +1,30 @@
 ---
 name: feature-bug-complexity-classification
 description: |
-  Single entry point for every HeyBap finding observed during forward
-  deployment: bug, missing feature, friction, surprise. Classifies the
-  finding on a strict simple-vs-complex grid and dispatches to one of
-  two leaf skills: `bap-bug-report` (SIMPLE: investigates, implements
-  the quick fix on a branch in `the-agentic-company/bap`, opens a PR,
-  creates a Linear ticket in team `Bap` at status `In Review` linked to
-  the PR) or `bap-feature-brainstorm` (COMPLEX: investigates, frames the
-  finding as problem + 3 options + decision question, creates a Linear
-  ticket in team `Bap` at status `Triage` with label `Need More Shaping`).
-  Linear sends notifications on create / update on its own; no Slack post.
-  Use whenever `parse-transcript-to-agent-spec`, `bap-coworker-test-loop`,
-  `transcript-to-bap-coworker`, or a human observes a HeyBap gap.
+  Single entry point for every HeyBap finding, whether the operator
+  signals it manually (ad-hoc bug/feature noticed during day-to-day usage)
+  or a pipeline step auto-detects it (parser, prior-art scout, feasibility
+  check, test loop, orchestrator). Classifies the finding on a strict
+  simple-vs-complex grid and dispatches to one of two leaf skills:
+  `bap-bug-report` (SIMPLE: investigates, implements the quick fix on a
+  branch in `the-agentic-company/bap`, opens a PR, creates a Linear ticket
+  in team `Bap` at status `In Review` linked to the PR) or
+  `bap-feature-brainstorm` (COMPLEX: investigates, frames the finding as
+  problem + 3 options + decision question, creates a Linear ticket in team
+  `Bap` at status `Triage` with label `Need More Shaping`). Linear sends
+  notifications on create / update on its own; no Slack post. Use whenever
+  `parse-transcript-to-agent-spec`, `bap-coworker-test-loop`,
+  `transcript-to-bap-coworker`, or the operator observes a HeyBap gap.
 ---
 
 # Feature and bug complexity classification gate for HeyBap
 
-The pipeline skills (`parse-transcript-to-agent-spec`, `bap-coworker-test-loop`, `transcript-to-bap-coworker`) sit at the front line of HeyBap usage. They are designed to surface every platform gap or misbehaviour as a structured *finding*. This skill is the single gate every finding goes through. It classifies, decides where the finding lands, and invokes the right downstream skill autonomously.
+Two distinct entry points feed this single gate:
+
+1. **Manual (operator-direct)**. Lubin notices a bug or wants a feature while using HeyBap day-to-day. He fires `./go.sh bug "..."` / `./go.sh feature "..."` from the HeyBap Pipeline workspace, or types "bug in heybap: ..." in Claude Code. This is the most common path in practice.
+2. **Auto (pipeline)**. The forward-deployment pipeline skills (`parse-transcript-to-agent-spec`, `bap-prior-art-scout`, `bap-platform-feasibility-check`, `bap-coworker-test-loop`, `transcript-to-bap-coworker`) surface every platform gap or misbehaviour they hit as a structured *finding*, and forward it here.
+
+Both paths land on the same grid, the same dedup window, the same confidence floor, the same dispatch. The router classifies, decides where the finding lands, and invokes the right downstream skill autonomously.
 
 Every finding becomes a Linear ticket in the `Bap` team. Linear's own notifications (Slack integration, email, in-app) replace the previous direct Slack posts; create / update events on the ticket are already broadcast to the team. The router never posts to Slack itself.
 
@@ -25,11 +32,19 @@ No finding bypasses this router. No finding is silently logged in a TODO comment
 
 ## When to invoke
 
+### Manual triggers (operator-direct)
+
+- Lubin is using HeyBap and notices something that does not work or could be better. From the shell: `./go.sh bug "<one-liner>"` or `./go.sh feature "<one-liner>"`. From Claude Code chat: `bug in heybap: <one-liner>` or `feature for heybap: <one-liner>`. Both forms construct the input contract and invoke this skill.
+- Inspecting a coworker output, a panel button, or a sandbox file, the operator notices a regression. Same wrappers.
+- A teammate says "this is broken in HeyBap" in chat and points at a specific surface. The operator forwards the description through `./go.sh bug "..."`.
+
+### Auto triggers (pipeline)
+
 - A pipeline step concludes "the root cause is in HeyBap, not in my prompt / skill" (`bap-coworker-test-loop` diagnose step returns `requiresHuman: true`).
 - The parser flags an `ambiguities[]` entry whose real story is "the platform should let me do this".
 - The orchestrator hits a HUMAN STOP that should not exist (workspace MCP bind, skill re-upload conflict, etc.).
-- Inspecting a coworker output, a panel button, or a sandbox file, the operator notices a regression.
-- A teammate says "this is broken in HeyBap" in chat and points at a specific surface.
+- `bap-favorite-coworker-watchdog` detects a platform-side anomaly on a production coworker (sandbox crash, runtime stopped making progress, MCP returning 5xx).
+- `bap-post-deploy-verify` finds a regression after merge.
 
 Do not invoke for findings outside HeyBap: a bug in a third-party MCP, a Notion API change, a Slack rate limit. Those go to the relevant provider's tracker.
 
@@ -162,9 +177,39 @@ invoke feature-bug-complexity-classification
   operatorConfidence: 0.85
 ```
 
-### Direct from the human
+### Manual trigger (operator-direct, most common path)
 
-If the human says "bug in HeyBap: when I click X, nothing happens", construct the input contract inline and invoke. The router still classifies and dispatches: it is the same gate.
+Two ergonomic wrappers, same gate behind both.
+
+**From the HeyBap Pipeline shell**:
+
+```
+./go.sh bug "Re-run button blocks 4s before firing, no feedback"
+./go.sh feature "Add coworker_pin to keep favorites visible across pagination"
+```
+
+`go.sh` is a thin wrapper that invokes `claude -p` headless with the input contract pre-built:
+
+```json
+{
+  "kind": "bug",                                  // or "feature"
+  "title": "<derived from the one-liner, < 80 chars>",
+  "oneLineDescription": "<the quoted string>",
+  "context": {
+    "pipelineStep": "runtime",                    // "ui" for feature by default
+    "evidence": []                                // operator can amend interactively
+  },
+  "operatorConfidence": 0.85
+}
+```
+
+`operatorConfidence` defaults to 0.85 (the operator is the most reliable source). The router still runs the 5-minute investigation to localize the surface, and downstream the leaf skill runs its 5-subagent deep research before opening the PR; the thin input contract does NOT shortcut that work.
+
+**From Claude Code chat**:
+
+The operator types a short message like `bug in heybap: coworker_run is super slow after redeploy` or `feature: coworker_pin to keep favorites at the top`. Claude constructs the same input contract inline and invokes this skill. No wrapper script needed.
+
+**Same gate, same rules**. Manual triggers go through the SAME classification grid, the SAME dedup window (60 days on Linear team `Bap`), the SAME confidence floor (0.6). The only difference is that `context.evidence` is usually thin (just the description) and the 5-minute investigation has to localize the surface from scratch instead of taking a `file:line` reference. The dedup check is even more important here because the operator might already have filed a similar finding from an auto trigger earlier.
 
 ### From `bap-bug-report` or `bap-feature-brainstorm` (not allowed)
 
