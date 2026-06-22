@@ -227,10 +227,13 @@ Body template (Slack mrkdwn):
 *Fix.* <one or two sentences naming the file(s) touched, the reuse anchor, and the diff size — e.g. "Reused `LoadingState`. +36 / -5 across 3 files.">
 
 PR <URL> · commit `<sha-short>` · <lines> lines · <files-touched> files
+Screenshots: <attachment.url #1> · <attachment.url #2>    ← only if the ticket already has image attachments OR Step 4's research pass captured a new repro; one URL per screenshot
 <@<reviewer-id>> ready for your review. Post-deploy verification will run after merge.
 ```
 
 Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (channel_id from config).
+
+Screenshot rule: list every image attachment already on the Linear ticket (read `issue.attachments` from Step 3's `get_issue` call, filter on `contentType` starting with `image/`). If Step 4's deep research captured a fresh repro screenshot via Chrome MCP, upload it to the ticket first (`prepare_attachment_upload` + `create_attachment_from_upload`) and include the new URL too. Drop the whole `Screenshots:` line when there are zero images — do not write "Screenshots: none".
 
 One message per PR. The `<@U…>` reviewer ping is required — it is the whole point of the post. On a re-implementation (loop tick later updating the same PR), reply in the thread of the original message rather than posting a new top-level message; the thread reply does NOT need to re-ping Baptiste.
 
@@ -274,6 +277,7 @@ The cap of 5 implementations per tick prevents a runaway loop from carpet-bombin
 - Carpet-bombing PRs in a single tick. Cap of 5 implementations per `/loop` invocation is hard.
 - Posting to Slack without including the PR URL + commit SHA + line counts. The notification IS the proof of work; minus those refs it is noise.
 - Posting to Slack without the original problem + fix summary or without the Baptiste ping. The review request never starts; the activity-feed-only format is no longer the team norm.
+- Forgetting the `Screenshots:` line when the ticket has image attachments. Slack auto-unfurls Linear asset URLs, so citing them gives Baptiste the repro evidence inline instead of forcing a Linear roundtrip.
 - Re-implementing a ticket whose PR is already open and CI-green. Check the existing PR first; if it solves the ticket, comment and stop, do not duplicate.
 - Forgetting the FINDING_CONTEXT downstream contract. `bap-post-deploy-verify` reads it from the Linear ticket; if it is missing, fail eligibility instead of generating one (would lose the original signal).
 

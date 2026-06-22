@@ -74,7 +74,7 @@ Use the Claude-in-Chrome MCP tools (`mcp__Claude_in_Chrome__*`):
 - `preview_screenshot` (or `computer` action) to capture the broken state. Take 1 to 3 screenshots: one wide shot, one zoomed, one of the working baseline for comparison if relevant.
 - `read_console_messages` and `read_network_requests` to catch silent errors, 4xx/5xx, unexpected payloads.
 - Use `find` / `javascript_tool` to probe DOM state, computed styles, dataset attributes.
-- Save screenshot file paths. Reference them in the Linear ticket description (Linear renders local paths as plain text, but the team can upload them on the ticket via the Linear UI if needed).
+- Save screenshot file paths into `evidence.screenshots` — Step 6 attaches them directly to the Linear ticket and Step 10 references them in the Slack post. Capturing the path is enough; no manual upload by the user.
 
 Skip Chrome reproduction only for purely backend / non-visual bugs. Justify the skip in one line in the ticket description.
 
@@ -229,7 +229,7 @@ Si aucun test : "test gap : <surface non couverte>"
 
 ## Repro
 <une ligne : où cliquer dans https://heybap.com>
-Screenshots : <chemins locaux, à uploader manuellement si besoin>
+Screenshots : voir pièces jointes du ticket (uploadées automatiquement par le skill, voir étape ci-dessous)
 
 ## Régression connue
 <commit hash + subject si trouvé via Step 3 angle 5, sinon "non identifié">
@@ -262,6 +262,18 @@ The `FINDING_CONTEXT` block is **mandatory** and stays embedded in the ticket de
 If the finding was passed to you with a pre-computed `hash`, use it verbatim. Otherwise compute it as `sha256(kind + "|" + title + "|" + first_code_ref_or_run_id)` so two findings on the same root cause produce the same hash.
 
 Capture the ticket identifier (`BAP-<n>`) and URL (`https://linear.app/heybap/issue/BAP-<n>`) returned by `save_issue`. You will use both in the next steps.
+
+**Attach every screenshot in `evidence.screenshots` to the ticket.** For each local file path captured in Step 2 (or provided by the user in chat), run:
+
+```
+upload  = mcp__linear__prepare_attachment_upload({ issueId: "<ticket uuid>", filename: "<basename>", contentType: "image/png" })
+# PUT the file bytes to upload.uploadUrl using the headers returned by prepare
+mcp__linear__create_attachment_from_upload({ issueId: "<ticket uuid>", assetUrl: upload.assetUrl, filename: "<basename>", title: "Repro screenshot" })
+```
+
+Record each returned `attachment.url` into `evidence.screenshotAttachments[]`; Step 10 cites them in the Slack post. If a screenshot path is in `/var/folders/.../T/` or another temp location, copy it to `~/HeyBap Pipeline/artifacts/BAP-<n>/` first so the upload doesn't race with cleanup.
+
+If `evidence.screenshots` is empty (purely backend bug, Step 2 was skipped, user pasted nothing), skip this substep. Do not invent screenshots.
 
 Title rules:
 - Match the convention from recent merged PRs in `the-agentic-company/bap`: `<Area>: <verb> <object>`. Check `gh pr list --state merged --limit 10` if unsure.
@@ -368,6 +380,7 @@ Body template (Slack mrkdwn):
 *Fix.* <one or two sentences naming the file(s) touched, the reuse anchor (or "new abstraction" if unavoidable), and the diff size — e.g. "Added `runStatus` prop to `EmptyPreview`, reuses existing `LoadingState`. +36 / -5 across 3 files.">
 
 PR <URL> · commit `<sha-short>` · <lines> lines · <files-touched> files
+Screenshots: <attachment.url #1> · <attachment.url #2>    ← only if evidence.screenshotAttachments is non-empty; one URL per screenshot; Slack auto-unfurls Linear asset URLs
 <@<reviewer-id>> ready for your review.
 ```
 
@@ -378,6 +391,7 @@ Constraints:
 - Exactly one message per PR. Do not re-post on PR updates; reply in the same thread instead.
 - The reviewer ping (`<@U…>`) is required — it is the whole point of the message; remove it and the notification is silent.
 - Problem and Fix are user-facing summaries, not raw ticket / commit text. Avoid em-dashes (the team's house style).
+- The `Screenshots:` line is required whenever `evidence.screenshotAttachments` is non-empty. Drop the entire line when no screenshot was captured — do not write "Screenshots: none".
 - Capture the `permalink` returned by `slack_send_message` and include it in the Step 11 return value as `slackPermalink`.
 
 ## Step 11 — return to the user
@@ -386,7 +400,9 @@ Output exactly three blocks, no commentary, no headers:
 
 1. The Linear ticket: `BAP-<n>  <ticket URL>`.
 2. The PR URL.
-3. If Chrome screenshots were captured in Step 2, one final line: `Screenshots: <paths>` so the user can attach them to the Linear ticket manually.
+3. The Slack permalink from Step 10.
+
+Screenshots are already attached to the Linear ticket and referenced in the Slack post (Step 6 + Step 10) — no manual upload to mention to the user.
 
 If the dedup step (Step 5) stopped you, output instead:
 - `Already covered by: BAP-<n> <ticket URL>` (or the existing PR URL if no ticket exists yet)
@@ -410,6 +426,7 @@ Use as sanity checks if the current bug sounds similar:
 - Do not use em-dashes anywhere (commit message, PR title, PR body, Linear ticket).
 - Do not skip Step 10's Slack `#dev` notification. The team relies on the explicit problem + fix summary and the Baptiste ping to know what is ready for review; Linear's auto-broadcast alone is not enough.
 - Do not drop the `<@reviewer-id>` ping from the Slack message. Without it, the post is silent and the review never starts.
+- Do not leave screenshots as local paths in the ticket description when `evidence.screenshots` is non-empty. The Step 6 attachment substep must run and the Slack post (Step 10) must cite the resulting URLs. Telling the user to upload manually defeats the automation.
 - Do not open the PR before the Linear ticket. The ticket identifier needs to be in the branch + title.
 - Do not skip the FINDING_CONTEXT JSON block. The post-deploy verifier depends on it to close the loop.
 - Do not skip Step 3's parallel-subagent fan-out, even on "obvious" bugs. The cost of one wasted research pass is 30 seconds; the cost of one wrong fix shipped is hours of regression. The 5 angles are mandatory.
