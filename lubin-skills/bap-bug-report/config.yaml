@@ -18,4 +18,9 @@ github_repo: "the-agentic-company/bap"
 slack:
   workspace: "The Agentic Company"
   pr_channel_id: "C0BCH5L6PQS"   # #pr-lubin — resolved at runtime via slack_search_channels({ query: "pr-lubin" }) if missing
-  review_user_id: "U0A87JNV8QP"   # Baptiste (CTO, reviewer) — resolved via slack_search_users({ query: "Baptiste" }) if missing
+  review_user_id: "U0A87JNV8QP"   # Baptiste (CTO, reviewer) — pinged on Step 10 PASS / SKIPPED variants
+  operator_user_id: "U0AT7378GSX" # Lubin (operator) — pinged on Step 10 FAILED variant when verify KO
+local_dev:
+  bap_main_checkout: "/Users/lubin.danilo/bap/bap"   # operator's checkout serving the dev server; Step 7.5 swaps branches here
+  dev_server_url: "http://localhost:3000"            # probe target before Step 2 / 7.5 + nav target for Chrome MCP
+  hmr_wait_seconds: 5                                # post-swap delay for Next.js HMR to recompile before re-navigating

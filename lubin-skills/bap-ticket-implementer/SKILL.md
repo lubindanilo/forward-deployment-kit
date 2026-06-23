@@ -187,13 +187,78 @@ gh pr create \
 
 Capture the PR URL.
 
-## Step 6.5 — capture the AFTER screenshot (Playwright, UI changes only)
+## Step 6.5 — verify the fix end-to-end on localhost (Chrome MCP, mandatory for UI changes)
 
-If the ticket touches UI, capture an "after" screenshot on the feature branch with Playwright (already installed in `apps/web` as `@playwright/test`). Make sure the local dev stack is up — `docker compose -f docker/compose/dev.yml up -d` + `bun run dev` from the repo root if needed — then wait for `localhost:3000`.
+Same contract as `bap-bug-report` Step 7.5. The autonomous loop does NOT post `Fixed, to review` unless the verification passed (or was explicitly skipped with a reason).
 
-Frame the same surface as the BEFORE screenshot already on the Linear ticket (read it from `issue.attachments` filtered on `contentType` starting with `image/`). Same viewport size, same path, so Baptiste can flip between BEFORE and AFTER directly.
+### A. Read the symptom assertion from the Linear ticket
 
-Save the screenshot to `~/HeyBap Pipeline/artifacts/BAP-<n>/after.png`, then upload it to Linear:
+`bap-bug-report` records `evidence.symptomAssertion` inside the FINDING_CONTEXT JSON block on every ticket it opens. Pull it:
+
+```
+issue = mcp__linear__get_issue({ id: "BAP-<n>" })
+# parse the FINDING_CONTEXT block in issue.description; field: evidence.symptomAssertion
+```
+
+If the FINDING_CONTEXT is missing or has no `symptomAssertion`, set `verifyResult = { passed: false, skipped: true, reason: "no-symptom-assertion-on-ticket" }` and jump to subsection D. The autonomous loop never invents an assertion.
+
+### B. Branch swap on the operator's main checkout
+
+```bash
+MAIN="<config.local_dev.bap_main_checkout>"
+BRANCH="<fix branch from Step 6>"
+PREV_BRANCH=$(git -C "$MAIN" rev-parse --abbrev-ref HEAD)
+DIRTY=$(git -C "$MAIN" status --porcelain)
+if [ -n "$DIRTY" ]; then
+  git -C "$MAIN" stash push --include-untracked --message "bap-ticket-implementer-verify-BAP-<n>"
+  STASHED=1
+fi
+git -C "$MAIN" fetch origin "$BRANCH"
+git -C "$MAIN" switch "$BRANCH"
+sleep <config.local_dev.hmr_wait_seconds>
+```
+
+On any swap failure → `verifyResult = { passed: false, skipped: true, reason: "branch-swap-failed: <err>" }` and jump to subsection D.
+
+### C. Reproduce + assert + screenshot via Chrome MCP
+
+```
+mcp__Claude_in_Chrome__navigate({ url: "<config.local_dev.dev_server_url>/<bug-path-from-FINDING_CONTEXT>" })
+# Replay any interaction (form_input, computer) needed to surface the symptom.
+mcp__Claude_in_Chrome__screenshot({ })   # save to ~/HeyBap Pipeline/artifacts/BAP-<n>/after.png
+afterText = mcp__Claude_in_Chrome__get_page_text({ })
+console   = mcp__Claude_in_Chrome__read_console_messages({ })
+network   = mcp__Claude_in_Chrome__read_network_requests({ })
+```
+
+Evaluate `symptomAssertion` against the captured state. The check is plain code (string match, regex, DOM probe via `find` / `inspect`), not an LLM judgment. Record:
+
+```json
+{
+  "verifyResult": {
+    "passed": true | false,
+    "skipped": false,
+    "assertion": "<verbatim from FINDING_CONTEXT.evidence.symptomAssertion>",
+    "observed": "<one sentence: what Chrome actually showed>",
+    "afterScreenshot": "~/HeyBap Pipeline/artifacts/BAP-<n>/after.png",
+    "consoleClean": true | false,
+    "networkClean": true | false
+  }
+}
+```
+
+### D. Restore the operator's working tree (always)
+
+```bash
+git -C "$MAIN" switch "$PREV_BRANCH"
+if [ "${STASHED:-0}" = "1" ]; then git -C "$MAIN" stash pop; fi
+```
+
+Run subsection D inside a trap / finally so a thrown error in B / C never leaves the operator's checkout on the fix branch.
+
+### E. Upload the AFTER screenshot to Linear
+
+For both PASS and FAILED outcomes (skip only when there is no screenshot, e.g. backend-only fix):
 
 ```
 upload  = mcp__linear__prepare_attachment_upload({ issue: "BAP-<n>", filename: "after.png", contentType: "image/png", size: <bytes> })
@@ -203,7 +268,13 @@ mcp__linear__create_attachment_from_upload({ issue: "BAP-<n>", assetUrl: upload.
 
 Record the returned `attachment.url` for Step 8 (Slack post) to cite.
 
-Skip for purely backend bugs.
+### F. Fallbacks (autonomous loop is often AFK)
+
+- Chrome MCP unreachable → Playwright fallback (headless chromium against `localhost:3000` with `storage-state.json`). Same swap + sleep + assertion logic.
+- Localhost down → `verifyResult.skipped = true, reason = "localhost-down"`.
+- Backend-only ticket → verify via `curl` or `mcp__bap-local__chat_run` / `coworker_run`, assert on response shape; `verifyResult.skipped = false`.
+
+If `verifyResult.passed === false && !verifyResult.skipped`: Step 7 keeps the ticket on `In Progress` (NOT `In Review`), keeps assignee Lubin (NOT Baptiste), and Step 8 uses the FAILED template pinging Lubin.
 
 ## Step 7 — Linear comment + state transition
 
@@ -225,7 +296,9 @@ Research summary: 5 subagents agreed on the root cause as described; adjacency r
 
 Use `mcp__linear__save_comment({ issueId: <uuid>, body: ... })`.
 
-Then transition status and reassign. Once the PR is open, the operator (Lubin) is done; only Baptiste can review and merge, so the ticket leaves Lubin's queue:
+Then transition status and reassign. **Conditional on `verifyResult` from Step 6.5.**
+
+Pass case (`verifyResult.passed === true` OR `verifyResult.skipped === true`):
 
 ```
 mcp__linear__save_issue({
@@ -235,7 +308,20 @@ mcp__linear__save_issue({
 })
 ```
 
-This runs whether the ticket was at `Triage`, `In Progress`, or `In Review` (the call is idempotent on status and reassigns regardless, so a re-implementation loop tick that updates an existing PR still ends with the ticket on Baptiste). `bap-post-deploy-verify` transitions to `Live` after Baptiste's merge + the prod deploy.
+Fail case (`verifyResult.passed === false && !verifyResult.skipped`):
+
+```
+mcp__linear__save_issue({
+  id: "BAP-<n>",
+  state: "<config.linear.statuses.in_progress>",    // stays on Lubin's queue, NOT reassigned
+})
+mcp__linear__save_comment({
+  issue: "BAP-<n>",
+  body: "Vérif Chrome MCP KO sur la branche du fix.\nAssertion : <verifyResult.assertion>\nObservé : <verifyResult.observed>\nPR laissée en draft, à reprendre."
+})
+```
+
+`bap-post-deploy-verify` transitions PASS / SKIPPED tickets from `In Review` to `Live` after Baptiste's merge + the prod deploy. The FAIL case never gets there until Lubin re-implements.
 
 ## Step 8 — Slack `#pr-lubin` notification (problem + fix + ping Baptiste for review)
 
@@ -246,14 +332,43 @@ Resolve identifiers:
 - channel id from `config.yaml` (`slack.pr_channel_id` = `C0BCH5L6PQS` = `#pr-lubin`); fall back to `slack_search_channels({ query: "pr-lubin" })` only if the placeholder is still in place.
 - reviewer id from `config.yaml` (`slack.review_user_id` = `U0A87JNV8QP` = Baptiste); fall back to `slack_search_users({ query: "Baptiste" })` only if missing.
 
-Body template (Slack mrkdwn). The first line is the call to action: a `Fixed, to review` prefix followed by the Baptiste ping and the PR URL — at a glance, the post reads as "code written, Baptiste reviews + merges". Line 2 is the italic PR title. Lines 3-4 describe the problem and the fix with `file:line` refs.
+The body template is **conditional on `verifyResult` from Step 6.5**. Three variants (same shape as `bap-bug-report` Step 10).
+
+### Variant 1 — PASS (verifyResult.passed === true)
 
 ```
 Fixed, to review <@<reviewer-id>> <PR URL>
 _<PR title without the BAP-<n> prefix>_
 <problème en 1-2 phrases, langue produit, tiré du ticket>
 <fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : ✅ <verifyResult.assertion>. <verifyResult.observed>
+Screenshots : <BEFORE Linear asset URL> · <AFTER Linear asset URL>
 ```
+
+### Variant 2 — SKIPPED (verifyResult.skipped === true)
+
+```
+Fixed, to review <@<reviewer-id>> <PR URL>
+_<PR title without the BAP-<n> prefix>_
+<problème en 1-2 phrases, langue produit, tiré du ticket>
+<fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : skipped (<verifyResult.reason>). À retester avant merge.
+```
+
+### Variant 3 — FAILED (verifyResult.passed === false && !skipped)
+
+Pings the operator (Lubin), NOT Baptiste — the fix is broken, Lubin re-investigates.
+
+```
+Vérif KO, à reprendre <@<operator-id>> <PR URL>
+_<PR title without the BAP-<n> prefix>_
+<problème en 1-2 phrases, langue produit, tiré du ticket>
+<tentative en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : ❌ <verifyResult.assertion>. <verifyResult.observed>. PR laissée en draft.
+Screenshots : <BEFORE Linear asset URL> · <AFTER Linear asset URL>
+```
+
+`<operator-id>` = `config.slack.operator_user_id` (Lubin, `U0AT7378GSX`).
 
 Mandatory call sequence:
 
@@ -276,11 +391,12 @@ else:
 Constraints:
 
 - Exactly one message per PR (top-level, no thread reply). On a re-implementation tick that updates an existing PR, detect the prior message via `slack_search_public({ query: "<PR URL>", limit: 5 })`; if found, reply in its thread WITHOUT re-pinging Baptiste; if not found, post a fresh top-level message.
-- Line 1 starts with the literal text `Fixed, to review ` followed by the `<@U…>` ping and the PR URL. The ping triggers Baptiste's Slack notification; the prefix labels the action.
+- Line 1 prefix is the action label. PASS = `Fixed, to review` (ping Baptiste). SKIPPED = also `Fixed, to review` (still Baptiste's queue, just unverified). FAILED = `Vérif KO, à reprendre` (ping Lubin, NOT Baptiste).
 - The PR URL on line 1 is the actionable link. The italic PR title on line 2 reinforces "PR is open, just review the diff."
 - No `Linear:` link line. The ticket reference at the end (`Ticket : BAP-<n>`) is enough.
 - Both descriptive sentences (problem + fix) carry `file:line` references for the bridge between the PR diff and the symptom.
-- The `Screenshots:` line is optional. Add it as a fifth line only when the Linear ticket already has image attachments (`Screenshots : <url1> · <url2>`).
+- The `Verified:` line is **mandatory** in every variant.
+- The `Screenshots:` line is **mandatory whenever the Linear ticket has BEFORE / AFTER attachments** (PASS and FAILED variants). Cite the Linear asset URLs (Slack auto-unfurls them inline).
 
 ## Step 8.5 — watch CI, fix red until green
 
@@ -343,6 +459,9 @@ The cap of 5 implementations per tick prevents a runaway loop from carpet-bombin
 - Posting to Slack without including the PR URL + commit SHA + line counts. The notification IS the proof of work; minus those refs it is noise.
 - Posting to Slack without the original problem + fix summary or without the Baptiste ping. The review request never starts; the activity-feed-only format is no longer the team norm.
 - Forgetting the `Screenshots:` line when the ticket has image attachments. Slack auto-unfurls Linear asset URLs, so citing them gives Baptiste the repro evidence inline instead of forcing a Linear roundtrip.
+- Posting the PASS template (`Fixed, to review`) when `verifyResult.passed === false`. The fix did not fix; use the FAILED template pinging Lubin instead.
+- Skipping Step 6.5's Chrome MCP verification when localhost is reachable and the ticket has a UI surface. The verification is the contract, not optional.
+- Leaving the operator's main checkout on the fix branch after Step 6.5. Subsection D must always run, even on a thrown error.
 - Re-implementing a ticket whose PR is already open and CI-green. Check the existing PR first; if it solves the ticket, comment and stop, do not duplicate.
 - Forgetting the FINDING_CONTEXT downstream contract. `bap-post-deploy-verify` reads it from the Linear ticket; if it is missing, fail eligibility instead of generating one (would lose the original signal).
 - Calling `gh pr merge` from this skill. Lubin no longer has merge rights on `the-agentic-company/bap`; Baptiste is the only person who merges. The autonomous loop stops at "CI green + Slack #pr-lubin pinged."
@@ -361,8 +480,13 @@ linear:
   in_review_status: "423d89b9-126c-4db1-aa27-05b25baafd20"
 slack:
   workspace: "The Agentic Company"
-  pr_channel_id: "C0BCH5L6PQS"   # #pr-lubin — set once via slack_search_channels({ query: "pr-lubin" })
-  review_user_id: "U0A87JNV8QP"   # Baptiste — set once via slack_search_users({ query: "Baptiste" })
+  pr_channel_id: "C0BCH5L6PQS"      # #pr-lubin — set once via slack_search_channels({ query: "pr-lubin" })
+  review_user_id: "U0A87JNV8QP"     # Baptiste — pinged on Step 8 PASS / SKIPPED variants
+  operator_user_id: "U0AT7378GSX"   # Lubin — pinged on Step 8 FAILED variant when verify KO
+local_dev:
+  bap_main_checkout: "/Users/lubin.danilo/bap/bap"   # operator's checkout serving the dev server; Step 6.5 swaps branches here
+  dev_server_url: "http://localhost:3000"            # probe target + Chrome MCP navigate target
+  hmr_wait_seconds: 5                                # post-swap delay for Next.js HMR to recompile
 github:
   repo: "the-agentic-company/bap"
   branch_prefix: "fix/bap-"

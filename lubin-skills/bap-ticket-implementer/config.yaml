@@ -11,8 +11,13 @@ linear:
   reviewer_user_id: "b05ce629-639d-4861-8de0-c2ba17ce84a6"  # Baptiste — Linear reassign target when the PR opens (Step 7)
 slack:
   workspace: "The Agentic Company"
-  pr_channel_id: "C0BCH5L6PQS"   # #pr-lubin — resolved at runtime via slack_search_channels({ query: "pr-lubin" }) if missing
-  review_user_id: "U0A87JNV8QP"   # Baptiste (CTO, reviewer) — resolved via slack_search_users({ query: "Baptiste" }) if missing
+  pr_channel_id: "C0BCH5L6PQS"      # #pr-lubin — resolved at runtime via slack_search_channels({ query: "pr-lubin" }) if missing
+  review_user_id: "U0A87JNV8QP"     # Baptiste (CTO, reviewer) — pinged on Step 8 PASS / SKIPPED variants
+  operator_user_id: "U0AT7378GSX"   # Lubin (operator) — pinged on Step 8 FAILED variant when Chrome MCP verify KO
+local_dev:
+  bap_main_checkout: "/Users/lubin.danilo/bap/bap"   # operator's checkout serving the dev server; Step 6.5 swaps branches here
+  dev_server_url: "http://localhost:3000"            # probe target + Chrome MCP navigate target
+  hmr_wait_seconds: 5                                # post-swap delay for Next.js HMR to recompile
 github:
   repo: "the-agentic-company/bap"
   branch_prefix: "fix/bap-"

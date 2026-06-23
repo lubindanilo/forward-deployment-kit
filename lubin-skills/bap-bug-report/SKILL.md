@@ -69,39 +69,56 @@ gh repo clone the-agentic-company/bap /tmp/bap-bug-$(date +%s)
 
 The local clone is mandatory: this skill writes a fix on a branch and pushes it.
 
-## Step 2 — reproduce in the live product (Playwright, when relevant)
+## Step 2 — reproduce the bug live in Chrome (preferred) or Playwright (fallback)
 
 For any UI / UX / layout / interaction / visual bug, **reproduce the issue live and capture a "before" screenshot before concluding**. Static code reading alone misses half the picture (overflow, z-index, layout collapse, hover states, transition glitches, race conditions on load).
 
-Use Playwright (already installed in `apps/web` as `@playwright/test`). The dev stack must be up; if it is not, restart it (`docker compose -f docker/compose/dev.yml up -d` then `bun run dev` from the repo root) and wait for `localhost:3000` to respond.
+**Primary path — Chrome MCP (Claude in Chrome extension).** The operator (Lubin) keeps a Chrome browser signed in on `http://localhost:3000` against his own dev server running out of `<config.local_dev.bap_main_checkout>` (`/Users/lubin.danilo/bap/bap` by default). The skill drives that browser directly — no auth fixture needed, no headless context. This is the path to use whenever the dev stack is up and the Chrome MCP server is reachable.
 
-Capture the **BEFORE** screenshot on the broken state — checkout `main` (or the branch where the bug reproduces), navigate to the affected surface, take a screenshot, save it to `~/HeyBap Pipeline/artifacts/BAP-<n>/before.png`. Naming matters: Step 6 uploads this file as `before.png` to Linear; downstream skills read it from there.
+Pre-conditions:
 
-Minimal Playwright snippet (run from `apps/web/`):
+1. `curl -sf -o /dev/null -w "%{http_code}" <config.local_dev.dev_server_url>` returns `200`. If not, ask the operator to start the dev stack (`docker compose -f docker/compose/dev.yml up -d` + `bun run dev` from `<config.local_dev.bap_main_checkout>`) and re-poll. If still down after the prompt, fall back to Playwright (next subsection).
+2. Operator's main checkout is on a branch where the bug reproduces (usually `main`). Probe with `git -C <config.local_dev.bap_main_checkout> rev-parse --abbrev-ref HEAD`. If the current branch is not `main` and the bug requires `main`, ask before any switch — never mutate the operator's working tree at this step.
+
+Chrome MCP repro flow:
+
+```
+mcp__Claude_in_Chrome__navigate({ url: "<config.local_dev.dev_server_url>/<bug-path>" })
+mcp__Claude_in_Chrome__screenshot({ })  // wide shot of the broken surface
+# Save the returned image bytes (base64 in the tool result) to ~/HeyBap Pipeline/artifacts/BAP-<n>/before.png
+mcp__Claude_in_Chrome__read_console_messages({ })    // silent JS errors
+mcp__Claude_in_Chrome__read_network_requests({ })    // 4xx / 5xx / unexpected payloads
+mcp__Claude_in_Chrome__get_page_text({ })            // anchor the symptom in plain text (a missing toast, a wrong redirect target, etc.)
+```
+
+When the bug requires interaction (click, type, drag) to surface, drive it via `mcp__Claude_in_Chrome__computer` / `mcp__Claude_in_Chrome__form_input` BEFORE the screenshot. The screenshot must show the bug, not just the page on which it would happen.
+
+Record three artefacts:
+
+- `evidence.symptomAssertion` — one sentence describing what to LOOK FOR to know the bug is present (e.g. "the workspace switch lands on `/` instead of `/agents`", "the dropzone shows a red error toast 'fichier trop volumineux'", "the chat input's send button stays disabled"). Step 7.5 will use this verbatim to assert the symptom is GONE after the fix.
+- `evidence.symptomObserved` — what Chrome actually showed during this repro (URL, visible text, console line, network response). Confirms the assertion is grounded.
+- `evidence.screenshots[]` with `{ kind: "before", path: "~/HeyBap Pipeline/artifacts/BAP-<n>/before.png" }`.
+
+**Fallback path — Playwright (autonomous loop only).** When Chrome MCP is unavailable (operator AFK, extension disconnected, Phase 2 running headless via `claude -p` without a live browser), fall back to the Playwright snippet below. It uses headless chromium against the same `localhost:3000` and an auth fixture (`apps/web/tests/e2e/fixtures/*` or `storage-state.json`):
 
 ```ts
-// scripts/bug-report-capture.ts (created ad-hoc and deleted after run)
 import { chromium } from "@playwright/test"
-const url = "http://localhost:3000/agents/info/<slug>"  // path that reproduces the bug
+const url = "http://localhost:3000/agents/info/<slug>"
 const out = "/Users/lubin.danilo/HeyBap Pipeline/artifacts/BAP-<n>/before.png"
 const browser = await chromium.launch()
-const ctx = await browser.newContext({ storageState: "storage-state.json" })  // pre-authed session
+const ctx = await browser.newContext({ storageState: "storage-state.json" })
 const page = await ctx.newPage()
+page.on("console", m => console.log("console:", m.type(), m.text()))
+page.on("requestfailed", r => console.log("requestfailed:", r.url(), r.failure()?.errorText))
 await page.goto(url)
 await page.waitForLoadState("networkidle")
 await page.screenshot({ path: out, fullPage: true })
 await browser.close()
 ```
 
-Use the existing auth fixture (`apps/web/tests/e2e/fixtures/*` or the project's `storage-state.json`) so the page lands authenticated. Capture 1 to 3 screenshots: one wide shot, one zoomed on the broken element, one of the working baseline if useful.
+Record `evidence.verifyMode: "chrome-mcp" | "playwright"` so Step 7.5 mirrors the same path.
 
-Also probe `page.evaluate(...)`, `page.on("console", ...)`, and `page.on("requestfailed", ...)` to catch silent errors, 4xx/5xx, unexpected payloads — equivalent of Chrome MCP's `read_console_messages` and `read_network_requests`.
-
-The **AFTER** screenshot is captured in Step 7.5 once the fix is implemented.
-
-Save every screenshot path into `evidence.screenshots` and tag each one as `kind: "before" | "after" | "context"` — Step 6 attaches them directly to the Linear ticket and Step 10 references the AFTER URL in the Slack post.
-
-Skip Playwright reproduction only for purely backend / non-visual bugs. Justify the skip in one line in the ticket description.
+Skip the live repro only for purely backend / non-visual bugs (schema migration, MCP server, log-only). Set `evidence.verifyMode = "skipped"` with a one-line justification in the Linear ticket; Step 7.5 then does API-level verification instead of UI verification.
 
 The visual evidence refines the diagnosis. It does not replace the code-level root cause.
 
@@ -288,15 +305,101 @@ Commit with a Bap-style message that references the ticket:
 
 Areas seen on the repo: `Web`, `Sandbox`, `Skills`, `Core`, `Agents`, `Chat`. Pick the most fitting.
 
-## Step 7.5 — capture the AFTER screenshot (Playwright, UI changes only)
+## Step 7.5 — verify the fix end-to-end on localhost (Chrome MCP, mandatory for UI changes)
 
-For any UI change, capture an "after" screenshot on the feature branch the same way Step 2 captured the "before". Save to `~/HeyBap Pipeline/artifacts/BAP-<n>/after.png`, frame the same surface as the before, same viewport size — Baptiste and the team need a direct before/after comparison.
+**This step is the contract.** The skill does NOT post "Fixed, to review" unless this verification passed (or was explicitly skipped with a justified reason). A screenshot alone is not enough — the skill must reproduce the same path that triggered the bug in Step 2 and assert that the symptom is gone.
 
-Run the same minimal Playwright snippet from Step 2 (different output path and the new fix already applied on disk). Make sure the local dev stack is up; if not, `docker compose -f docker/compose/dev.yml up -d` and `bun run dev` from the repo root, then wait for `localhost:3000`.
+### A. Branch swap on the operator's main checkout
 
-Append the path to `evidence.screenshots` with `kind: "after"`. Step 9 attaches it to the Linear ticket and Step 10 cites the Linear asset URL in the Slack post.
+The fix lives on a feature branch pushed to GitHub (Step 7). To verify against the operator's running dev server (which serves `<config.local_dev.dev_server_url>` out of `<config.local_dev.bap_main_checkout>`), the skill swaps that working tree to the fix branch, lets HMR recompile, runs the verification, then swaps back.
 
-Skip for purely backend bugs.
+```bash
+MAIN="<config.local_dev.bap_main_checkout>"
+BRANCH="<fix branch name pushed in Step 7>"
+
+# Capture current state so we can restore it
+PREV_BRANCH=$(git -C "$MAIN" rev-parse --abbrev-ref HEAD)
+DIRTY=$(git -C "$MAIN" status --porcelain)
+if [ -n "$DIRTY" ]; then
+  git -C "$MAIN" stash push --include-untracked --message "bap-bug-report-verify-BAP-<n>"
+  STASHED=1
+fi
+
+git -C "$MAIN" fetch origin "$BRANCH"
+git -C "$MAIN" switch "$BRANCH"
+sleep <config.local_dev.hmr_wait_seconds>   # let Next.js HMR recompile
+```
+
+If any of the swap commands fail (uncommitted merge, locked index, branch not yet pushed), set `verifyResult = { passed: false, skipped: true, reason: "branch-swap-failed: <error>" }` and jump to subsection D (restore). Step 10 will use the SKIPPED template.
+
+### B. Reproduce the same path and assert the symptom is gone
+
+Re-drive the exact path captured in Step 2, on the same URL, in the same Chrome window the operator has signed in. The assertion uses `evidence.symptomAssertion` verbatim — it is the contract between the BEFORE and the AFTER.
+
+```
+mcp__Claude_in_Chrome__navigate({ url: "<config.local_dev.dev_server_url>/<bug-path>" })
+# If the bug required interaction to surface, redrive the same clicks / form_input here.
+mcp__Claude_in_Chrome__screenshot({ })  # save bytes to ~/HeyBap Pipeline/artifacts/BAP-<n>/after.png
+afterText  = mcp__Claude_in_Chrome__get_page_text({ })
+console    = mcp__Claude_in_Chrome__read_console_messages({ })
+network    = mcp__Claude_in_Chrome__read_network_requests({ })
+```
+
+Evaluate the assertion against `afterText` / `console` / `network`. Examples:
+
+| `symptomAssertion`                                                  | Pass criterion (the symptom is GONE)                                                |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| "workspace switch lands on `/` instead of `/agents`"                | current URL ends with `/agents` (or `/agents/...`), not `/`                         |
+| "dropzone shows a red error toast 'fichier trop volumineux'"        | no `.toast--error` in `afterText`, no `413` / `payload too large` in `network`      |
+| "chat send button stays disabled after typing"                      | `button[data-action='send']` has no `disabled` attribute after `form_input` typed   |
+| "skill_add returns ok=true but the skill is missing from coworker"  | `coworker_get` (Bap MCP) lists the skill in `skills[]`                              |
+
+The assertion check is plain code (string match on the text, regex on the URL, structural check on the DOM via `mcp__Claude_in_Chrome__find` / `inspect`). Do not let an LLM "judge" the screenshot.
+
+Record the outcome:
+
+```json
+{
+  "verifyResult": {
+    "passed": true | false,
+    "skipped": false,
+    "assertion": "<verbatim from evidence.symptomAssertion>",
+    "observed": "<one sentence: what Chrome actually showed>",
+    "afterScreenshot": "~/HeyBap Pipeline/artifacts/BAP-<n>/after.png",
+    "consoleClean": true | false,
+    "networkClean": true | false
+  }
+}
+```
+
+Append the path to `evidence.screenshots` with `kind: "after"`.
+
+### C. If verify FAILED — do not lie to Baptiste
+
+If `verifyResult.passed === false` (the symptom still reproduces after the swap, or the expected fix evidence is missing):
+
+- Do NOT proceed to Step 10's `Fixed, to review` post. The fix did not actually fix.
+- Add a Linear comment on BAP-<n> citing the observed state and the failed assertion.
+- Keep the PR open as **draft** (convert via `gh pr ready --undo <num>` if needed). It is still useful for Baptiste to read the code, but it is not "ready for review".
+- Step 9 leaves the ticket on `In Progress` (NOT `In Review`) and assigned to Lubin (NOT reassigned to Baptiste). The autonomous loop can retry on the next tick once Lubin re-investigates.
+- Step 10 still posts to `#pr-lubin` but with the FAILED template (subsection F of Step 10), pinging Lubin (not Baptiste) so he sees the broken fix first.
+
+### D. Restore the operator's working tree (always — even on failure)
+
+```bash
+git -C "$MAIN" switch "$PREV_BRANCH"
+if [ "${STASHED:-0}" = "1" ]; then
+  git -C "$MAIN" stash pop
+fi
+```
+
+Run subsection D inside a trap / finally so a thrown error in B does not leave the operator's checkout on the fix branch.
+
+### E. Fallback paths
+
+- **Playwright fallback** (autonomous loop, no Chrome MCP). Same swap + sleep + assertion logic, but the navigation + screenshot + console/network capture happens through the Playwright snippet from Step 2 (different output path). The headless context loses the operator's signed-in session, so use `storage-state.json`.
+- **Backend-only fix** (no UI surface). Skip subsections A-D. Verify via `curl` against an API endpoint or via `mcp__bap-local__chat_run` / `coworker_run`, asserting on the response shape. Record `verifyResult.assertion` in plain English just the same.
+- **Localhost down** OR **Chrome MCP disconnected** AND **Playwright fixture broken**. Set `verifyResult = { passed: false, skipped: true, reason: "..." }` and continue. Step 10 will use the SKIPPED template, explicitly flagging that nothing was verified — Baptiste then re-runs locally before merging.
 
 ## Step 8 — open the PR
 
@@ -353,9 +456,14 @@ PR title rules:
 
 Capture the PR URL returned by `gh pr create`. You will need it for Step 9.
 
-## Step 9 — update the Linear ticket: status In Review + reassign to Baptiste + attach PR
+## Step 9 — update the Linear ticket: status + assignee + attach PR
 
-Once the PR is open, the operator's (Lubin's) work on the ticket is done: he no longer has merge rights on `the-agentic-company/bap`, only Baptiste can review and merge. The ticket must therefore leave Lubin's "assigned to me" queue and land in Baptiste's. Transition status to `In Review` AND reassign to Baptiste:
+**Conditional on `verifyResult` from Step 7.5.**
+
+- If `verifyResult.passed === true` OR `verifyResult.skipped === true`: transition to `In Review` and reassign to Baptiste (the PR is ready for him to look at).
+- If `verifyResult.passed === false && verifyResult.skipped === false` (verification ran and failed): keep status `In Progress`, keep assignee Lubin, add a comment with the observed failure. **Do not reassign to Baptiste on a broken fix.** Lubin will re-investigate; the autonomous loop can retry on the next tick.
+
+Pass case (verified OR skipped):
 
 ```
 mcp__linear__save_issue({
@@ -365,6 +473,20 @@ mcp__linear__save_issue({
   links: [
     { url: "<PR URL>", title: "PR #<num> — <PR title>" }
   ]
+})
+```
+
+Fail case (verifyResult.passed === false, NOT skipped):
+
+```
+mcp__linear__save_issue({
+  id: "BAP-<n>",
+  state: "<config.linear.statuses.in_progress>",     // ticket stays in Lubin's queue
+  links: [ { url: "<PR URL>", title: "PR #<num> (draft, verify KO)" } ]
+})
+mcp__linear__save_comment({
+  issue: "BAP-<n>",
+  body: "Vérif Chrome MCP KO sur la branche du fix.\nAssertion : <verifyResult.assertion>\nObservé : <verifyResult.observed>\nPR laissée en draft."
 })
 ```
 
@@ -395,13 +517,17 @@ Resolve identifiers:
 - channel id from `config.yaml` (`slack.pr_channel_id`); if it is the placeholder, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_channels({ query: "pr-lubin" })` and cache for the session.
 - reviewer id from `config.yaml` (`slack.review_user_id`); if missing, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_users({ query: "Baptiste" })`.
 
-Body template (Slack mrkdwn). The first line is the call to action: a `Fixed, to review` prefix followed by the Baptiste ping and the PR URL — Baptiste sees in one glance that code is written and his queue is "review + merge". Line 2 is the italic PR title. Lines 3-4 describe the problem and the fix with `file:line` refs so Baptiste has the bridge between the symptom and the diff he is about to read.
+The body template is **conditional on `verifyResult` from Step 7.5**. Three variants:
+
+### Variant 1 — PASS template (verifyResult.passed === true)
 
 ```
 Fixed, to review <@<reviewer-id>> <PR URL>
 _<PR title without the BAP-<n> prefix>_
 <problème en 1-2 phrases, langue produit>
 <fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : ✅ <verifyResult.assertion>. <verifyResult.observed>
+Screenshots : <BEFORE Linear asset URL> · <AFTER Linear asset URL>
 ```
 
 Concrete example:
@@ -411,9 +537,38 @@ Fixed, to review <@U0A87JNV8QP> https://github.com/the-agentic-company/bap/pull/
 _Web: land on coworker list after workspace switch_
 Switching workspace from the sidebar dropdown (or from workspace settings) currently bounces the user to the public landing at /. For an established user toggling between workspaces, the expected destination is the coworker list.
 Two-line change: navigate({ to: "/" }) to navigate({ to: "/agents" }) in app-sidebar.tsx:478 and settings/workspace.tsx:152. Ticket : BAP-50.
+Verified : ✅ workspace switch lands on /agents. Chrome MCP on the fix branch redirected to /agents/info/scoop-monitor as expected.
+Screenshots : https://uploads.linear.app/.../before.png · https://uploads.linear.app/.../after.png
 ```
 
-Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (channel_id from config).
+### Variant 2 — SKIPPED template (verifyResult.skipped === true)
+
+When verification could not run (localhost down, Chrome MCP disconnected, backend-only fix, etc.). The line gives Baptiste the explicit reason so he knows to re-run locally before merging.
+
+```
+Fixed, to review <@<reviewer-id>> <PR URL>
+_<PR title without the BAP-<n> prefix>_
+<problème en 1-2 phrases, langue produit>
+<fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : skipped (<verifyResult.reason>). À retester avant merge.
+```
+
+### Variant 3 — FAILED template (verifyResult.passed === false && !verifyResult.skipped)
+
+When verification ran and the symptom still reproduces on the fix branch. The fix didn't fix — the post must NOT claim "Fixed, to review". Ping Lubin (operator), NOT Baptiste — Lubin re-investigates first.
+
+```
+Vérif KO, à reprendre <@<operator-id>> <PR URL>
+_<PR title without the BAP-<n> prefix>_
+<problème en 1-2 phrases, langue produit>
+<tentative en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
+Verified : ❌ <verifyResult.assertion>. <verifyResult.observed>. PR laissée en draft.
+Screenshots : <BEFORE Linear asset URL> · <AFTER Linear asset URL>
+```
+
+The `<operator-id>` is `config.slack.operator_user_id` (Lubin, `U0AT7378GSX`). Baptiste does NOT get pinged on a broken fix.
+
+Send via `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_send_message` (channel_id from config — same `#pr-lubin` channel for all three variants).
 
 Mandatory call sequence:
 
@@ -438,13 +593,14 @@ The return value (Step 12) must carry either `slackPermalink` OR `slackPostFaile
 Constraints:
 
 - Exactly one message per PR (top-level, no thread reply). On a re-run, the skill detects the existing message via `slack_search_public({ query: "<PR URL>", limit: 5 })` and skips reposting; thread updates do not re-ping Baptiste.
-- Line 1 starts with the literal text `Fixed, to review ` followed by the `<@U…>` reviewer ping and the PR URL. The ping is what makes Baptiste's Slack notify; removing it makes the post silent.
-- The `Fixed, to review` prefix is the action label: at a glance Baptiste sees this is a PR ready for review (not a brainstorm to arbitrate; the brainstorm sibling uses `À toi de trancher` instead).
+- Line 1 prefix is the action label that tells the reader, in 4 words, what to do. PASS = `Fixed, to review` (ping Baptiste). SKIPPED = also `Fixed, to review` (still Baptiste's queue, just unverified). FAILED = `Vérif KO, à reprendre` (ping Lubin, not Baptiste).
+- The ping (`<@U…>`) is what triggers a Slack notification; removing it makes the post silent. Baptiste on PASS / SKIPPED, Lubin on FAILED.
 - The PR URL on line 1 is the actionable link. The italic PR title on line 2 reinforces "PR is open, just review the diff."
 - No `Linear:` link line. The ticket reference at the end (`Ticket : BAP-<n>`) is enough; Linear auto-links bare identifiers.
 - Both descriptive sentences (problem + fix) carry `file:line` references for the bridge between the PR diff and the symptom.
 - Avoid em-dashes (team house style).
-- The `Screenshots:` line is optional. Add it as a fifth line only when `evidence.screenshotAttachments` is non-empty (`Screenshots : <url1> · <url2>`).
+- The `Verified:` line is **mandatory** in every variant. The PASS / SKIPPED / FAILED prefix tells Baptiste (or Lubin, in the FAILED case) what the verification status is at a glance — Linear and Slack are both noisy, the verdict must be inline.
+- The `Screenshots:` line is **mandatory whenever `evidence.screenshotAttachments` has at least a BEFORE entry** (PASS and FAILED variants always have BEFORE + AFTER; SKIPPED has only BEFORE if Step 2 ran). Cite the Linear asset URLs (Slack auto-unfurls them inline). Omit only for purely backend fixes where Step 2 was skipped.
 - The Slack channel id `C0BCH5L6PQS` (`#pr-lubin`) and the reviewer user id `U0A87JNV8QP` (Baptiste) are pinned in config. Resolve via `slack_search_channels` / `slack_search_users` only if the config placeholder is unchanged; otherwise use the configured ids directly.
 
 ## Step 11 — watch CI, fix red until green
@@ -503,6 +659,10 @@ Use as sanity checks if the current bug sounds similar:
 - Do not edit a test to make it pass after the fix. A test break is evidence the fix is wrong; return to Step 4 and pick a different alternative.
 - Do not call `gh pr merge` from this skill. Lubin no longer has merge rights on `the-agentic-company/bap`; Baptiste is the only person who merges. The contract stops at "CI green + Slack #pr-lubin pinged Baptiste."
 - Do not trigger any deploy workflow (`release-main.yml`, `prod-release.yml`) from this skill. Deploys are owned by Baptiste post-merge.
+- Do not post the PASS template (`Fixed, to review`) when `verifyResult.passed === false`. The fix did not fix; the post must be the FAILED template pinging Lubin instead. Lying to Baptiste burns his trust in this pipeline within one occurrence.
+- Do not skip Step 7.5's Chrome MCP verification when `localhost:3000` is reachable and the bug has a UI surface. Falling back to "screenshot only, no assertion" defeats the point — the symptom must be reproduced post-fix and observed gone before any `Fixed` claim.
+- Do not leave the operator's main checkout on the fix branch after Step 7.5. Step 7.5 subsection D restores the previous branch and pops the stash; this MUST run even on a thrown error (use a trap / finally).
+- Do not invent the `symptomAssertion` in Step 7.5. It must come from `evidence.symptomAssertion` recorded in Step 2 — the BEFORE assertion and the AFTER assertion are the same sentence, only the truth value flips.
 
 ## Config
 
