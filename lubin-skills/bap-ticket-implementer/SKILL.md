@@ -246,10 +246,10 @@ Resolve identifiers:
 - channel id from `config.yaml` (`slack.dev_channel_id` = `C0AH3JU73E0` = `#dev`); fall back to `slack_search_channels({ query: "dev" })` only if the placeholder is still in place.
 - reviewer id from `config.yaml` (`slack.review_user_id` = `U0A87JNV8QP` = Baptiste); fall back to `slack_search_users({ query: "Baptiste" })` only if missing.
 
-Body template (Slack mrkdwn). The first line is the call to action: a Baptiste ping followed by the PR URL. The second line is the italic PR title. Lines 3-4 describe the problem and the fix with `file:line` refs.
+Body template (Slack mrkdwn). The first line is the call to action: a `Fixed, to review` prefix followed by the Baptiste ping and the PR URL — at a glance, the post reads as "code written, Baptiste reviews + merges". Line 2 is the italic PR title. Lines 3-4 describe the problem and the fix with `file:line` refs.
 
 ```
-<@<reviewer-id>> <PR URL>
+Fixed, to review <@<reviewer-id>> <PR URL>
 _<PR title without the BAP-<n> prefix>_
 <problème en 1-2 phrases, langue produit, tiré du ticket>
 <fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
@@ -276,9 +276,9 @@ else:
 Constraints:
 
 - Exactly one message per PR (top-level, no thread reply). On a re-implementation tick that updates an existing PR, detect the prior message via `slack_search_public({ query: "<PR URL>", limit: 5 })`; if found, reply in its thread WITHOUT re-pinging Baptiste; if not found, post a fresh top-level message.
-- The `<@U…>` ping must be the first character of the post; otherwise Baptiste's Slack does not notify.
-- The PR URL on line 1 is the call to action. The italic PR title on line 2 signals "PR is open, just review the diff."
-- No `I fixed …` opener. No `Linear:` link line. The ticket reference at the end (`Ticket : BAP-<n>`) is enough.
+- Line 1 starts with the literal text `Fixed, to review ` followed by the `<@U…>` ping and the PR URL. The ping triggers Baptiste's Slack notification; the prefix labels the action.
+- The PR URL on line 1 is the actionable link. The italic PR title on line 2 reinforces "PR is open, just review the diff."
+- No `Linear:` link line. The ticket reference at the end (`Ticket : BAP-<n>`) is enough.
 - Both descriptive sentences (problem + fix) carry `file:line` references for the bridge between the PR diff and the symptom.
 - The `Screenshots:` line is optional. Add it as a fifth line only when the Linear ticket already has image attachments (`Screenshots : <url1> · <url2>`).
 

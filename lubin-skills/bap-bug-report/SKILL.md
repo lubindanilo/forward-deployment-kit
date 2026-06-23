@@ -395,19 +395,19 @@ Resolve identifiers:
 - channel id from `config.yaml` (`slack.dev_channel_id`); if it is the placeholder, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_channels({ query: "dev" })` and cache for the session.
 - reviewer id from `config.yaml` (`slack.review_user_id`); if missing, fall back to `mcp__aa816864-db59-4de1-a375-68c8cccbfe71__slack_search_users({ query: "Baptiste" })`.
 
-Body template (Slack mrkdwn). The first line is the call to action: a Baptiste ping followed by the PR URL. The second line is the italic PR title (signals "code already written, just review the diff"). Lines 3-4 describe the problem and the fix with `file:line` refs so Baptiste has the bridge between the symptom and the diff he is about to read.
+Body template (Slack mrkdwn). The first line is the call to action: a `Fixed, to review` prefix followed by the Baptiste ping and the PR URL — Baptiste sees in one glance that code is written and his queue is "review + merge". Line 2 is the italic PR title. Lines 3-4 describe the problem and the fix with `file:line` refs so Baptiste has the bridge between the symptom and the diff he is about to read.
 
 ```
-<@<reviewer-id>> <PR URL>
+Fixed, to review <@<reviewer-id>> <PR URL>
 _<PR title without the BAP-<n> prefix>_
 <problème en 1-2 phrases, langue produit>
 <fix en 1-2 phrases avec file:line touché>. Ticket : BAP-<n>.
 ```
 
-Concrete example (from Lubin's reference style):
+Concrete example:
 
 ```
-<@U0A87JNV8QP> https://github.com/the-agentic-company/bap/pull/51
+Fixed, to review <@U0A87JNV8QP> https://github.com/the-agentic-company/bap/pull/51
 _Web: land on coworker list after workspace switch_
 Switching workspace from the sidebar dropdown (or from workspace settings) currently bounces the user to the public landing at /. For an established user toggling between workspaces, the expected destination is the coworker list.
 Two-line change: navigate({ to: "/" }) to navigate({ to: "/agents" }) in app-sidebar.tsx:478 and settings/workspace.tsx:152. Ticket : BAP-50.
@@ -438,9 +438,9 @@ The return value (Step 12) must carry either `slackPermalink` OR `slackPostFaile
 Constraints:
 
 - Exactly one message per PR (top-level, no thread reply). On a re-run, the skill detects the existing message via `slack_search_public({ query: "<PR URL>", limit: 5 })` and skips reposting; thread updates do not re-ping Baptiste.
-- The reviewer ping (`<@U…>`) is required and must be the first character of the post — it is the whole point of the message; remove it and Baptiste's Slack does not notify.
-- The PR URL on line 1 is the call to action. The italic PR title on line 2 signals "PR is open, just review the diff."
-- No `I fixed …` opener anymore; the ping + URL on line 1 carry the action.
+- Line 1 starts with the literal text `Fixed, to review ` followed by the `<@U…>` reviewer ping and the PR URL. The ping is what makes Baptiste's Slack notify; removing it makes the post silent.
+- The `Fixed, to review` prefix is the action label: at a glance Baptiste sees this is a PR ready for review (not a brainstorm to arbitrate; the brainstorm sibling uses `À toi de trancher` instead).
+- The PR URL on line 1 is the actionable link. The italic PR title on line 2 reinforces "PR is open, just review the diff."
 - No `Linear:` link line. The ticket reference at the end (`Ticket : BAP-<n>`) is enough; Linear auto-links bare identifiers.
 - Both descriptive sentences (problem + fix) carry `file:line` references for the bridge between the PR diff and the symptom.
 - Avoid em-dashes (team house style).
