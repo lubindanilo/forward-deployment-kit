@@ -603,6 +603,40 @@ coworker_setStatus({ reference: "<dupe-id>", status: "off" })
 
 A disabled coworker stops accepting runs and drops out of the active list, which is enough to end the confusion. **Hard deletion is UI-only today**: HeyBap → the coworker → delete. Treat full removal of dupes as a HUMAN STOP (surface the exact ids/names to delete), the same way rule #20 treats skill-enable. When `coworker_delete` lands as an MCP tool, disable+delete inline instead.
 
+## 26. Panel buttons fail silently unless they satisfy the activation gate
+
+A panel button can be perfectly wired — correct `bap:agentic-app-prompt` envelope, `type="button"`, a real click handler — and still inject **nothing** into the chat, with no error. The reason is the parent-side **activation gate** ([`agentic-app-activation-gate.ts`](https://github.com/the-agentic-company/bap) in `apps/web/src/components/chat/`). The iframe is `sandbox="allow-scripts allow-forms"` with `srcDoc` (origin `null`); **clicks inside it never reach the parent**, so Bap reconstructs "did a human do this?" from two signals and rejects the `postMessage` if either is missing:
+
+1. **`document.activeElement === iframe`** at the instant the parent processes the message, and
+2. **engagement armed** = a parent-visible gesture (pointer/keydown over the panel) followed by focus *entering* the iframe, the two within 5 s; the arming then lives 60 s.
+
+When it rejects, the parent posts back `{type:"bap:agentic-app-prompt-result", status:"rejected", reason}` where `reason ∈ {no_user_activation, rate_limited, invalid}`. If your panel ignores that ack, the user sees the button grey for a moment and "nothing happens."
+
+**Build every panel button to satisfy and surface this:**
+
+- **Post inside the real click handler, synchronously.** No `setTimeout` before `postMessage` (even 0 ms consumes the gesture). No posting on load / in observers.
+- **Post BEFORE disabling the button.** Disabling the focused button can move `document.activeElement` off the iframe before the parent evaluates → `no_user_activation`. Order: build prompt → `postMessage` → *then* disable.
+- **Always render the ack.** Add a visible diagnostic line and write `JSON.stringify(event.data)` into it on every `bap:agentic-app-prompt-result`. This is the single fastest way to turn "rien ne se passe" into a concrete `no_user_activation` / `rate_limited` and was what finally diagnosed `email-panel-lubin` (2026-06-23). Lubin's reference panel `output-2.html` works partly *because* it shows the ack JSON.
+- **Single-action panels are the most reliable.** A one-button panel guarantees the user's click *is* the focus-entry that arms the gate. Multi-field editors (edit-then-send) are riskier: if the user has been focused inside the iframe for >60 s, engagement can expire; and the send click is not a fresh focus-entry. For editors, keep the turnaround short and surface the ack so a stale-engagement rejection is visible and retryable.
+- **Rate limit:** max 6 sends / 60 s, min 1 s apart — back off on `rate_limited`.
+
+The envelope itself is a frozen contract (ADR 0014): `{type:"bap:agentic-app-prompt", version:1, prompt:"<non-empty>"}`, reply `…-result`. Don't invent fields; unknown shapes are silently ignored (`kind:"ignored"`).
+
+## 27. `skill_add` never upserts — it forks a new slug, and every enabled skill lands in the sandbox
+
+`mcp__bap__skill_add` with frontmatter `name: foo` does **not** overwrite an existing `foo`; it creates `foo-2`, then `foo-3`, … (same silent-duplicate family as rule #25's `coworker_create`). Worse for runtime: **all enabled skills are written into the sandbox and listed in `AGENTS.md`**, regardless of a coworker's `allowedSkillSlugs`. So a SKILL.md that discovers its own script with
+
+```bash
+find … -name render.py | grep foo | head -1
+```
+
+matches **both** `foo/` and `foo-2/`, and `head -1` picks the *old* `foo/` (lexically first) — i.e. your fix silently does not run. Observed on `email-panel-lubin` (2026-06-23): re-uploading produced `email-panel-lubin-2`, the agent kept executing the stale `email-panel-lubin/render.py`, and the diagnostic build never took effect until the discovery was pinned.
+
+**Mitigations:**
+- Pin discovery to the exact slug: `find … -path '*foo-2*' -name render.py | head -1`, and put that exact command in the **coworker prompt** (always loaded) rather than relying on the skill's own grep.
+- There is **no `skill_delete` / `skill_update` MCP tool** — stale copies can only be toggled off in the UI (HeyBap → Skills). Treat de-duping skills as a HUMAN STOP, like rule #20.
+- Best: get the slug right on the first `skill_add` and avoid re-adds; iterate the bundled script via the pinned path instead of re-uploading under a colliding name.
+
 ## Build / debug workflow
 
 1. **Design** — write the SKILL.md focused on what the agent *decides*; offload everything mechanical to bundled scripts.
@@ -629,6 +663,8 @@ A disabled coworker stops accepting runs and drops out of the active list, which
 - Marking a panel-using coworker `live` after a MODE TEST run because `/app/output.html` appeared in `sandboxFiles`. Rule #22. MODE TEST renders the panel; it does not validate that clicking Send reaches the chat or that Gmail actually sends. Run a phase-2 test with your own email as receiver before declaring done.
 - Writing `<button>Send</button>` instead of `<button type="button">Send</button>` in a panel — rule #23. The default is submit, the postMessage gets dropped silently, the button greys and nothing happens. Always set type=button explicitly on every panel button.
 - Retrying a `coworker_create` that returned "Internal server error" without checking `coworker_list` first — rule #25. The errored call often persisted the coworker anyway; retrying breeds silent duplicates that steal runs and send you debugging the wrong one. Reconcile via the list, keep one, `setStatus: off` the rest (no MCP delete; hard-delete is UI-only).
+- A panel button that greys then does nothing in chat — rule #26. Correct envelope + `type="button"` is not enough: the activation gate rejects (`no_user_activation`) if `activeElement` isn't the iframe or engagement isn't armed. Post before disabling, and render the `…-result` ack so the reason is visible instead of silent.
+- Re-running `skill_add` to "update" a skill — rule #27. It forks `foo-2`; all enabled skills land in the sandbox, and a `grep foo | head -1` discovery then runs the stale `foo/`. Pin discovery to the exact slug (`-path '*foo-2*'`) and toggle stale copies off in the UI.
 
 ## See also
 
