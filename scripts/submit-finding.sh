@@ -90,20 +90,22 @@ Invoke the \`feature-bug-complexity-classification\` skill with this input:
 Run the gate's full flow without asking for confirmation:
 1. Linear dedup search (team Bap, last 60 days, several distinctive tokens from the one-liner).
 2. 5-minute investigation in a clone of \`the-agentic-company/bap\` to localize the surface and estimate fix size.
-3. Classification on the 12-criterion grid (SIMPLE vs COMPLEX). Default to COMPLEX when in doubt.
-4. Dispatch:
+3. Clarification gate: if the surface is localized, the likely fix is small, and the only blocker is operator intent (for example exact UI placement or label wording), return \`needs-clarification\` with one concise question instead of dispatching as COMPLEX-SCOPED.
+4. Classification on the 12-criterion grid (SIMPLE vs COMPLEX), after the clarification gate. Default to COMPLEX only when the clarification gate does not apply.
+5. Dispatch:
    - SIMPLE → \`bap-bug-report\` runs its own 5-subagent deep research, opens the PR, and creates the Linear ticket at status In Review (label Bug or Feature + Dogfooding, assignee Lubin).
    - COMPLEX → \`bap-feature-brainstorm\` produces problem + 3 options + decision question, creates the Linear ticket at status Triage (label Need More Shaping + Bug or Feature + Dogfooding, assignee Baptiste). For capability gaps, Step 3b inside the brainstorm quantifies impact (Grain corpus + past builds + use cases unlocked + verdict) and the ticket carries an Impact section.
 
 Do not stop to ask for permission on any tool call. The .claude/settings.json in this repo pre-approves every tool the gate needs.
 
 Output at the end, in this exact shape:
-1. The verdict: dispatched | already-reported | low-confidence | config-missing.
+1. The verdict: dispatched | needs-clarification | already-reported | low-confidence | config-missing.
 2. The classification (kind + complexity).
 3. The downstream skill invoked.
-4. The Linear ticket identifier and URL (e.g. BAP-127, https://linear.app/heybap/issue/BAP-127).
-5. The PR URL if a PR was opened.
-6. A one-sentence summary suitable for the dashboard.
+4. The clarification question if the verdict is needs-clarification.
+5. The Linear ticket identifier and URL (e.g. BAP-127, https://linear.app/heybap/issue/BAP-127).
+6. The PR URL if a PR was opened.
+7. A one-sentence summary suitable for the dashboard.
 EOF
 )
 

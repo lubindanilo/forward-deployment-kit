@@ -21,12 +21,17 @@ Parse these from the request:
 3. Do the same focused 5-minute investigation in the Bap codebase:
    - localize the likely surface
    - estimate lines changed and files touched
-   - decide SIMPLE vs COMPLEX using the rubric strictly
+   - check the clarification gate before marking a small ambiguity complex
+   - decide SIMPLE vs COMPLEX using the rubric strictly after that gate
    - if COMPLEX, decide SCOPED vs FUZZY using the fuzziness rules
 4. Do not call the Claude wrapper. Codex performs the classification and downstream action itself.
 
 ## Downstream action
 
+- `needs-clarification`: ask the user one concise question and stop before any
+  ticket, artifact, or implementation work. Use this when the surface is
+  localized, the likely fix is small, and the only blocker is operator intent
+  such as exact UI placement or label wording.
 - `simple`: implement the fix in the appropriate repo when feasible, verify it, and prepare the scoped commit/branch state.
 - `complex-scoped`: prepare the brainstorm artifact the team needs, using the FDK brainstorm format as the reference.
 - `complex-fuzzy`: prepare the direction-shaping artifact the team needs, using the FDK shaping format as the reference.
@@ -46,5 +51,7 @@ At the end, report:
 
 - Do not route through `./scripts/submit-finding.sh`.
 - Apply the file-count threshold from the current FDK rubric exactly.
+- Do not classify a small localized UI/copy ambiguity as `complex-scoped` until
+  the user has had a chance to answer the clarification question.
 - If a required external tool is unavailable, continue with the best local artifact instead of blocking early.
 - Keep the user informed when the result is a prepared artifact rather than a live Linear action.
